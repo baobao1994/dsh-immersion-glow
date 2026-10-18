@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Immersion glow",
+    "description": "When active time crosses a threshold, a reminder card in the top-right corner points to this session’s stats; keep any of them as a record. Records stay on this machine; no network."
+  }
+}

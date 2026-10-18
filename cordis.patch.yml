@@ -1,0 +1,11 @@
+# 把「沉浸觉察」挂进当前 profile。
+#
+# 这是一个 bundle patch 层：`insert` 往 loader 树里加一条插件条目，name 就是
+# 本包名 —— 宿主据此加载 lib/index.js（宿主半，空壳），并按 package.json 的
+# dsh.client 声明去加载 lib/client.js（浏览器半，承载全部 UI）。
+#
+# id 与包名解耦但保持一一对应；tools/verify-bundle.mjs 会断言
+# insert[0].name === package.json 的 name，防止复制粘贴别的插件时撞车。
+- insert:
+    - id: immersion-glow
+      name: dsh-immersion-glow

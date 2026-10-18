@@ -1,0 +1,9 @@
+# 构建产物是入库的（DSH 只认 lib/client.js 的存在），所以 lib/ 不忽略。
+# 这里只忽略开发过程中产生的临时物。
+
+node_modules/
+.DS_Store
+*.log
+
+# 本地对比实验的临时目录
+.tmp/
