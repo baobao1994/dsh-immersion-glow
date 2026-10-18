@@ -103,7 +103,10 @@ test('createInitialState：默认设置符合 PRD（3min 冻结 / 10min 重置 /
   assert.equal(state.settings.idleTimeoutMs, 3 * 60 * 1000);
   assert.equal(state.settings.resetGapMs, 10 * 60 * 1000);
   assert.equal(state.settings.enabled, true);
-  assert.equal(state.settings.showInlineTimer, false, '默认不主动呈现时间');
+  // v4：常驻读数默认开，但它同时受「设了阈值」与「发起过」两个条件约束，
+  // 所以开箱状态下右上角仍然是干净的。
+  assert.equal(state.settings.showCornerMeter, true, '右上角读数默认开');
+  assert.equal('showInlineTimer' in state.settings, false, '输入框常驻计时已退役（v4）');
   assert.equal('intensity' in state.settings, false, '强度设置已随光带退役（ADR-123）');
 });
 

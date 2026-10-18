@@ -1,21 +1,29 @@
 /**
- * 沉浸记录卡（PRD §2.2 F5/F6/F7 + §3.1 展开/收起动效）。
+ * 沉浸记录卡（v4 重做）。
  *
- * 三格指标：沉浸时长、对话轮次、工具调用；再加时段标签（F14）。
+ * 一句话概括这次任务的账：叫什么、跑了多久、花在哪个模型上、结果满不满意。
  *
- * 三条口径诚实性要求（PRD §6 已知限制）：
- *   1. 探针只取结构性计数、取不到正文 → 卡片不展示任何内容摘要；
- *   2. 无会话时探针不挂载 → 显示 stale 文案，不静默用旧数据冒充新数据；
- *   3. `hasMore` 为真时统计只覆盖已加载窗口 → 必须显式说明。
+ * ## 四块内容
+ *   1. 任务名  —— 首次发起的首句（截断 60 字），来源见 session-log.js 的隐私说明
+ *   2. 总账    —— 模型净耗时 / 工具耗时 / 轮次
+ *   3. 模型明细 —— 逐模型一行，可展开逐条备注「这次用着怎么样」
+ *   4. 目的确认 —— 达到了 / 基本达到 / 没达到，三档 + 一句备注
  *
- * 生命周期：仅在展开时挂载；收起先播 0.45s 退场动画，再真正卸载
- * （PRD §3.2「仅在展开时挂载，动画结束即卸载」）。
+ * ## 为什么目的确认是三档不是开关
+ * 「基本做完但有返工」是最常见的真实状态。压成 boolean 会把它逼成两端之一，
+ * 记录下来之后统计失真，几个月后回看就是一堆没信息量的 yes/no。
+ *
+ * ## 生命周期
+ * 仅在展开时挂载；收起先播 0.45s 退场动画再卸载。
  *
  * @module src/client/record-card
  */
 
-/** 退场动画时长，与 styles.js 里 .ig-panel--closing 的 0.45s 对齐。 */
+/** 退场动画时长，与 panel-css.js 里 .ig-panel--closing 的 0.45s 对齐。 */
 const CLOSE_ANIMATION_MS = 450;
+
+/** 一行备注的最大长度（与 state.js 的 MODEL_NOTE_LIMIT 一致量级）。 */
+const NOTE_MAX = 200;
 
 /**
  * 安全取值：把可能为 undefined 的指标变成可渲染值。
@@ -38,22 +46,26 @@ function normalizeMetrics(metrics) {
 /**
  * 渲染沉浸记录卡。
  *
- * @param props - { React, t, useImmersionGlow, durationText, stale, handlers, segment, metrics }
+ * @param props - { React, t, useImmersionGlow, handlers, bucket, entries,
+ *   metrics, stale }
  * @returns React 元素或 null。
  */
 function RecordCard(props) {
-  const { React, t, useImmersionGlow, durationText, stale, handlers } = props;
+  const { React, t, useImmersionGlow, handlers, bucket, entries, stale } = props;
   const h = React.createElement;
 
   const cardOpen = useImmersionGlow((state) => state.ui.cardOpen);
+  const focusedId = useImmersionGlow((state) => state.ui.focusedRecordId);
   const savedCount = useImmersionGlow((state) => state.collections.length);
-
-  // segment / metrics 由父层按「当前会话分区」算好后传入 —— 卡片不该自己猜
-  // 该显示哪个会话的数据。
-  const metricsRaw = props.metrics ?? null;
-  const segment = props.segment ?? { startedAt: 0, activeMs: 0 };
+  const collections = useImmersionGlow((state) => state.collections);
+  const verdict = useImmersionGlow((state) => state.verdicts ?? {});
+  const modelNotes = useImmersionGlow((state) => state.modelNotes ?? {});
 
   const [closing, setClosing] = React.useState(false);
+  // 「记一条模型备注」的展开态按模型 key 存：多模型时不至于只剩一个能展开。
+  const [noteOpen, setNoteOpen] = React.useState(null);
+  const [noteDraft, setNoteDraft] = React.useState('');
+  const [verdictDraft, setVerdictDraft] = React.useState('');
 
   /** 播放退场动画后再真正卸载。 */
   const close = React.useCallback(() => {
@@ -65,10 +77,10 @@ function RecordCard(props) {
     return () => window.clearTimeout(timer);
   }, [handlers]);
 
-  // Esc 关闭 + 关闭后清掉 transient closing 态。
   React.useEffect(() => {
     if (!cardOpen) {
       setClosing(false);
+      setNoteOpen(null);
       return undefined;
     }
     const onKeyDown = (event) => {
@@ -80,27 +92,172 @@ function RecordCard(props) {
 
   if (!cardOpen) return null;
 
-  const metrics = normalizeMetrics(metricsRaw);
-  const tags = tagsOf(segment.startedAt, segment.activeMs);
+  // ── 数据源：聚焦某条收藏时以它为准，否则看当前时段 ──────────────────
+  const focused =
+    typeof focusedId === 'string' && focusedId.length > 0
+      ? (Array.isArray(collections) ? collections : []).find((item) => item.id === focusedId) ?? null
+      : null;
 
-  /** 一格指标。 */
+  const source = focused !== null ? focused : bucket;
+  const isRecord = focused !== null;
+  const recordKey = isRecord ? focused.id : 'current';
+
+  const metrics = normalizeMetrics(focused === null ? props.metrics ?? null : focused);
+  const modelEntries = Array.isArray(entries) ? entries : [];
+  const stats = source !== null && source !== undefined ? source.stats ?? null : null;
+
+  const modelMs = sumField(modelEntries, 'modelMs');
+  const toolMs = stats !== null && Number.isFinite(stats.toolMs) ? stats.toolMs : 0;
+  const turns = stats !== null && Number.isFinite(stats.turns) && stats.turns > 0
+    ? stats.turns
+    : metrics.turns;
+
+  const taskName =
+    source !== null && source !== undefined && typeof source.taskName === 'string' && source.taskName.length > 0
+      ? source.taskName
+      : null;
+
+  const tags = source !== null && source !== undefined
+    ? tagsOf(
+        Number.isFinite(source.startedAt) ? source.startedAt : 0,
+        Number.isFinite(source.activeMs) ? source.activeMs : 0,
+      )
+    : [];
+
+  const currentVerdict = verdict[recordKey] ?? null;
+
+  // ── 小构件 ────────────────────────────────────────────────────────
   const metric = (label, value) =>
-    h(
-      'div',
-      { className: 'ig-metric', key: label },
-      h('dt', null, label),
-      h('dd', null, value),
-    );
+    h('div', { className: 'ig-metric', key: label }, h('dt', null, label), h('dd', null, value));
 
-  /** 一条说明，warn 为真时用警示色。 */
   const note = (text, warn) =>
-    h('p', { className: warn === true ? 'ig-note ig-note--warn' : 'ig-note', key: text }, text);
+    h('p', { class: warn === true ? 'ig-note ig-note--warn' : 'ig-note', key: text }, text);
 
   const notes = [];
   if (stale) notes.push(note(t('card.stale'), true));
   if (metrics.degraded) notes.push(note(t('card.degraded'), true));
-  else if (metricsRaw === null) notes.push(note(t('card.noData')));
+  else if (focused === null && (props.metrics ?? null) === null) notes.push(note(t('card.noData')));
   if (metrics.truncated) notes.push(note(t('card.windowTruncated')));
+
+  // ── 逐模型行 ──────────────────────────────────────────────────────
+  const modelRow = (entry) => {
+    const key = entry.key;
+    const notesForModel = Array.isArray(modelNotes[key]?.notes) ? modelNotes[key].notes : [];
+    const rating =
+      notesForModel.length > 0
+        ? notesForModel.reduce((sum, item) => sum + (Number.isFinite(item.rating) ? item.rating : 0), 0) /
+          notesForModel.length
+        : 0;
+    const isOpen = noteOpen === key;
+
+    return h(
+      'li',
+      { class: 'ig-model', key },
+
+      h(
+        'div',
+        { class: 'ig-model-head' },
+        h('span', { class: 'ig-model-name' }, modelLabel(entry)),
+        rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
+        h('span', { class: 'ig-model-time' }, formatDuration(entry.modelMs, t)),
+      ),
+
+      h(
+        'div',
+        { class: 'ig-model-sub' },
+        [
+          t('card.turns') + ' ' + (Number.isFinite(entry.turns) ? entry.turns : 0),
+          entry.cancelledMs > 0 ? t('card.cancelled', { duration: formatDuration(entry.cancelledMs, t) }) : null,
+        ]
+          .filter((piece) => piece !== null && String(piece).length > 0)
+          .join(' · '),
+      ),
+
+      // 已有备注：显示最近一条，不藏起来。
+      !isOpen && notesForModel.length > 0
+        ? h('p', { class: 'ig-note ig-note--quote' }, notesForModel[0].note || t('card.note.bare'))
+        : null,
+
+      isOpen
+        ? h(
+            'div',
+            { class: 'ig-model-note' },
+            // 五档：差 / 一般 / 还好 / 顺手 / 极其顺手。文字档比星星更诚实 ——
+            // 「4 星」在用户心里没有稳定含义，文字有。
+            h(
+              'div',
+              { class: 'ig-rating' },
+              [1, 2, 3, 4, 5].map((value) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    key: value,
+                    class: 'ig-rating-btn',
+                    'aria-label': t('card.rating.aria', { n: value }),
+                    title: t(`card.rating.${value}`),
+                    onClick: () => {
+                      const text = noteDraft.slice(0, NOTE_MAX);
+                      handlers.rateModel({
+                        modelKey: key,
+                        rating: value,
+                        note: text,
+                        recordId: isRecord ? recordKey : null,
+                        taskName,
+                      });
+                      setNoteDraft('');
+                      setNoteOpen(null);
+                    },
+                  },
+                  t(`card.rating.${value}`),
+                ),
+              ),
+            ),
+            h('textarea', {
+              class: 'ig-textarea',
+              rows: 2,
+              placeholder: t('card.note.placeholder'),
+              value: noteDraft,
+              onChange: (event) => setNoteDraft(event.target.value),
+            }),
+          )
+        : h(
+            'button',
+            {
+              type: 'button',
+              class: 'ig-model-add',
+              onClick: () => {
+                setNoteOpen(key);
+                setNoteDraft(notesForModel.length > 0 ? notesForModel[0].note : '');
+              },
+            },
+            notesForModel.length > 0 ? t('card.note.edit') : t('card.note.add'),
+          ),
+    );
+  };
+
+  // ── 目的确认 ──────────────────────────────────────────────────────
+  const verdictButtons = ['yes', 'partial', 'no'].map((value) =>
+    h(
+      'button',
+      {
+        type: 'button',
+        key: value,
+        class: currentVerdict !== null && currentVerdict.verdict === value
+          ? 'ig-verdict-btn ig-verdict-btn--on'
+          : 'ig-verdict-btn',
+        'aria-pressed': currentVerdict !== null && currentVerdict.verdict === value,
+        onClick: () => {
+          if (currentVerdict !== null && currentVerdict.verdict === value) {
+            handlers.clearVerdict(recordKey);
+            return;
+          }
+          handlers.setVerdict({ recordId: recordKey, verdict: value, note: verdictDraft.slice(0, NOTE_MAX) });
+        },
+      },
+      t(`card.verdict.${value}`),
+    ),
+  );
 
   return h(
     React.Fragment,
@@ -114,18 +271,30 @@ function RecordCard(props) {
         'aria-modal': 'false',
         'aria-label': t('card.title'),
       },
+
+      // ── 头部：任务名 + 关闭 ────────────────────────────────────────
       h(
         'div',
         { className: 'ig-panel-head' },
-        h('h2', { className: 'ig-panel-title' }, t('card.title')),
+        h(
+          'div',
+          { className: 'ig-panel-head-text' },
+          h('h2', { className: 'ig-panel-title' }, t('card.title')),
+          h(
+            'span',
+            { className: 'ig-task' },
+            taskName === null ? t('card.untitled') : taskName,
+          ),
+        ),
         h('button', { type: 'button', className: 'ig-panel-close', onClick: close }, t('card.close')),
       ),
 
+      // ── 总账 ──────────────────────────────────────────────────────
       h(
         'dl',
         { className: 'ig-metrics' },
-        metric(t('card.duration'), durationText),
-        metric(t('card.turns'), metrics.degraded ? '—' : String(metrics.turns)),
+        metric(t('card.modelTime'), formatDuration(modelMs, t)),
+        metric(t('card.turns'), metrics.degraded && turns === 0 ? '—' : String(turns)),
         metric(t('card.toolCalls'), metrics.degraded ? '—' : String(metrics.toolCalls)),
       ),
 
@@ -139,6 +308,34 @@ function RecordCard(props) {
 
       notes.length > 0 ? h('div', null, notes) : null,
 
+      // ── 逐模型明细 ────────────────────────────────────────────────
+      modelEntries.length > 0
+        ? h(
+            'div',
+            { className: 'ig-block' },
+            h('h3', { className: 'ig-block-title' }, t('card.models')),
+            h('ul', { className: 'ig-models' }, modelEntries.map(modelRow)),
+          )
+        : h('p', { className: 'ig-note' }, t('card.models.empty')),
+
+      // ── 目的确认 ──────────────────────────────────────────────────
+      h(
+        'div',
+        { className: 'ig-block' },
+        h('h3', { className: 'ig-block-title' }, t('card.verdict.title')),
+        h('p', { className: 'ig-note' }, t('card.verdict.hint')),
+        h('div', { className: 'ig-verdict' }, verdictButtons),
+        currentVerdict !== null || verdictDraft.length > 0
+          ? h('textarea', {
+              class: 'ig-textarea',
+              rows: 2,
+              placeholder: t('card.verdict.placeholder'),
+              value: verdictDraft,
+              onChange: (event) => setVerdictDraft(event.target.value),
+            })
+          : null,
+      ),
+
       h(
         'div',
         { className: 'ig-actions' },
@@ -148,8 +345,7 @@ function RecordCard(props) {
             type: 'button',
             className: 'ig-btn ig-btn--primary',
             onClick: handlers.saveCurrentRecord,
-            // 不足 1 分钟的记录没有收藏价值，禁用避免堆垃圾。
-            disabled: segment.activeMs < 60000,
+            disabled: isRecord || source === null || source === undefined || modelMs + toolMs < 60000,
           },
           savedCount > 0
             ? `${t('card.save')} · ${t('gallery.count', { n: savedCount })}`
@@ -159,6 +355,11 @@ function RecordCard(props) {
           'button',
           { type: 'button', className: 'ig-btn ig-btn--quiet', onClick: handlers.openGallery },
           t('card.openGallery'),
+        ),
+        h(
+          'button',
+          { type: 'button', className: 'ig-btn ig-btn--quiet', onClick: handlers.openSummary },
+          t('card.openSummary'),
         ),
       ),
     ),

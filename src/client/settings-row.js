@@ -12,11 +12,13 @@
  *   - 标题 + 描述 + 启用开关
  *   - 触发阈值（逗号分隔的数字列表，非法输入就地标红且不写回）
  *   - 空闲冻结分钟
- *   - 输入框常驻计时开关
+ *   - 右上角常驻读数开关
+ *   - 收藏 / 汇总入口
  *   - 埋点一行 + 复制统计
  *   - 清除本插件数据（两次确认）
  *
- * 强度选择（呼吸 / 静默）已随光带退役删除（ADR-123）。
+ * 强度选择（呼吸 / 静默）已随光带退役删除（ADR-123）；输入框常驻计时已在
+ * v4 搬到右上角（见 hud.js），本行不再有那个开关。
  *
  * @module src/client/settings-row
  */
@@ -27,7 +29,7 @@
  * @returns React 元素。
  */
 function SettingsRow(props) {
-  const { React, t, useImmersionGlow, actions, onCopyStats, onOpenGallery } = props;
+  const { React, t, useImmersionGlow, actions, onCopyStats, onOpenGallery, onOpenSummary } = props;
   const h = React.createElement;
 
   const settings = useImmersionGlow((state) => state.settings);
@@ -148,13 +150,13 @@ function SettingsRow(props) {
             ? h('p', { className: 'ig-note ig-note--warn' }, t('settings.thresholds.invalid'))
             : h('p', { className: 'ig-note' }, t('settings.thresholds.hint')),
 
-          switchRow(t('settings.inlineTimer'), settings.showInlineTimer, (checked) =>
-            actions.updateSettings({ showInlineTimer: checked }),
+          switchRow(t('settings.cornerMeter'), settings.showCornerMeter, (checked) =>
+            actions.updateSettings({ showCornerMeter: checked }),
           ),
         )
       : null,
 
-    // 收藏入口。
+    // 收藏与汇总入口。
     //
     // 以前画廊只能从记录卡里的按钮进 —— 卡片一关就再也找不到收藏了。
     // 设置行是常驻的，把它放这里才是「收藏完之后去哪里看」的答案。
@@ -173,6 +175,7 @@ function SettingsRow(props) {
           ? t('gallery.openFromSettings', { n: collectionCount })
           : t('gallery.emptyFromSettings'),
       ),
+      h('button', { type: 'button', className: 'ig-btn', onClick: onOpenSummary }, t('settings.openSummary')),
     ),
 
     // 埋点展示 —— 解 PRD §0 变更 12 的「零网络却要验证点击率」矛盾

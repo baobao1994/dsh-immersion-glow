@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Immersion glow",
-    "description": "When active time crosses a threshold, a reminder card in the top-right corner points to this session’s stats; keep any of them as a record. Records stay on this machine; no network."
+    "description": "After you send a request, a resident reading in the top-right corner shows the model and time spent; at each threshold it reminds you to review, and you can record whether it got you there and how useful the model felt. Data stays on this machine; no network."
   }
 }

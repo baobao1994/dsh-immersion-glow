@@ -636,9 +636,23 @@ test('回归：迁移把 localStorage 里的旧值改写成当前 schema', () =>
   const stored = JSON.parse(sandbox.localStorage.getItem('immersion-glow.v1'));
   assert.equal(typeof stored.sessions, 'object', '落盘值必须带 sessions');
   assert.ok(stored.sessions !== null);
-  assert.equal(stored.version, 3, '落盘值应升级到当前 schema 版本');
+  assert.equal(stored.version, 4, '落盘值应升级到当前 schema 版本');
   assert.equal('hintVisible' in stored.ui, false, '旧 ui 键必须在迁移时剥落');
   assert.equal(stored.ui.reminder, null, '提醒恢复必须置空（页面生命周期状态）');
+  // v4：输入框常驻计时退役，右上角读数上位。
+  assert.equal('showInlineTimer' in stored.settings, false, '旧设置键必须在迁移时剥落');
+  assert.equal(stored.settings.showCornerMeter, true, '右上角读数开关应有默认值');
+  // v4：两个自评表必须存在，哪怕旧数据里完全没有 —— UI 直接读它们。
+  assert.deepEqual(stored.verdicts, {}, 'verdicts 表必须存在');
+  assert.deepEqual(stored.modelNotes, {}, 'modelNotes 表必须存在');
+  // v4：新建分区必须补齐新字段，且 models 是**数组**（UI 会 .length 它）。
+  //
+  // 注意这份 fixture 的 metrics 是 null —— v1 的顶层时长因此「归属不明」，
+  // 按 ADR-117 的原则被丢弃（宁可少算也不冒充某个会话）。所以这里只能验
+  // sessions 为空对象时的迁移不炸，不能断言有分区。
+  assert.deepEqual(stored.sessions, {}, '归属不明的旧时长应被丢弃，不挂孤儿分区');
+  assert.equal('segment' in stored, false, 'v1 顶层时长键应被剥除');
+  assert.equal('metrics' in stored, false, 'v1 顶层指标键应被剥除');
 });
 
 // ── 回归 D：session 探针认领 sessionId（最权威的当前会话来源） ──────────

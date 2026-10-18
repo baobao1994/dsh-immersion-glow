@@ -41,25 +41,58 @@ function Gallery(props) {
 
   const row = (item) => {
     const tags = Array.isArray(item.tags) ? item.tags : tagsOf(item.createdAt, item.activeMs);
+    const name = typeof item.taskName === 'string' && item.taskName.length > 0 ? item.taskName : null;
+    const verdict = item.verdict ?? null;
+
     return h(
       'li',
       { className: 'ig-row', key: item.id },
+
+      // 左侧任务名：这是画廊里最该被看见的东西，比时长重要。
       h(
         'div',
         { className: 'ig-row-main' },
-        h('span', { className: 'ig-row-duration' }, formatDuration(item.activeMs, t)),
+        h(
+          'span',
+          { className: 'ig-row-title' },
+          name === null ? t('card.untitled') : name,
+        ),
         h(
           'span',
           { className: 'ig-row-sub' },
           [
+            formatDuration(item.activeMs, t),
+            Array.isArray(item.models) && item.models.length > 0
+              ? item.models.map((entry) => modelLabel(entry)).join(' · ')
+              : null,
             t('card.turns') + ' ' + (Number.isFinite(item.turns) ? item.turns : 0),
-            t('card.toolCalls') + ' ' + (Number.isFinite(item.toolCalls) ? item.toolCalls : 0),
             tags.map((id) => t(`tag.${id}`)).join(' · '),
           ]
-            .filter((piece) => piece.length > 0)
+            .filter((piece) => piece !== null && String(piece).length > 0)
             .join(' · '),
         ),
+        verdict !== null && verdict !== undefined && verdict.verdict
+          ? h(
+              'span',
+              { className: `ig-verdict-dot ig-verdict-dot--${verdict.verdict}` },
+              t(`card.verdict.${verdict.verdict}`),
+            )
+          : null,
       ),
+
+      // 回看：把这条记录带进记录卡，可以补评价和备注 —— 收藏不该是静态墓碑。
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'ig-row-review',
+          onClick: () => handlers.reviewRecord(item.id),
+          title: t('gallery.review'),
+          'aria-label': `${t('gallery.review')}: ${name === null ? t('card.untitled') : name}`,
+        },
+        t('gallery.review'),
+      ),
+
       h(
         'button',
         {

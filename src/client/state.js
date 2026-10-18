@@ -37,19 +37,50 @@ const PERSIST_KEY = 'immersion-glow.v1';
 const GALLERY_LIMIT = 50;
 
 /** 当前 state schema 版本。见 migrateState 的版本说明。 */
-const STATE_VERSION = 3;
+const STATE_VERSION = 4;
 
 /** 阈值提醒卡在右上角停留多久；超时后转为未读徽标，直到用户点击。 */
 const REMINDER_TIMEOUT_MS = 60 * 1000;
 
+/** 汇总面板里每个模型最多保留多少条历史备注。 */
+const MODEL_NOTE_LIMIT = 200;
+
 /**
  * 会话分区的零值。
+ *
+ * v4 起一个分区携带四类数据：
+ *   - segment  本会话的净活跃时间（旧的「你自己在打字」口径，保留）
+ *   - metrics  窗口内的结构性计数（轮次 / 工具调用）
+ *   - stats    宿主 sessionStats 投影的 whole-log 墙钟与计数
+ *   - models   逐模型耗时归属（model-log.js 从 chat 快照推导）
+ *   - taskName 第一次发起的任务名称
  *
  * @param now - 起始时间戳。
  * @returns 一份全新的空 segment。
  */
 function emptySegment(now) {
   return { startedAt: now, lastActiveAt: now, activeMs: 0, activeRuns: 0, firedCount: 0 };
+}
+
+/**
+ * 一个会话分区的零值。
+ *
+ * 抽成函数是因为 switchSession / writeSession / migrate 三处都要建同样的空壳，
+ * 三处各写一遍必然漂移。
+ *
+ * @param now - 起始时间戳。
+ * @returns 空分区。
+ */
+function emptyBucket(now) {
+  return {
+    segment: emptySegment(now),
+    metrics: null,
+    stats: null,
+    models: [],
+    taskName: null,
+    currentModel: null,
+    updatedAt: now,
+  };
 }
 
 /**
@@ -60,7 +91,16 @@ const DEFAULT_SETTINGS = {
   thresholdsMin: [20, 40, 60],
   idleTimeoutMs: 3 * 60 * 1000, // 3 分钟冻结
   resetGapMs: 10 * 60 * 1000, // 10 分钟新时段
-  showInlineTimer: false,
+  /**
+   * 是否显示右上角常驻读数。
+   *
+   * v4 新增：读数只在「设了阈值」且「本次会话发起过至少一次询问」时出现。
+   * 后一个条件由 isTaskStarted 推导，不额外记开关 —— 门槛本身就是发起这个动作。
+   *
+   * ⚠ 这里**没有** showInlineTimer：输入框常驻计时已退役，迁移时删干净
+   * （见 migrateState 里的 delete）。
+   */
+  showCornerMeter: true,
 };
 
 /**
@@ -91,8 +131,8 @@ function createInitialState(now) {
     /**
      * sessionId -> 该会话的计时分区。
      *
-     * 形如 { [sessionId]: { segment, metrics, updatedAt } }。上限 20 个，超出
-     * 丢最久未更新的 —— 会话一多不可能无限膨胀 localStorage。
+     * 形如 { [sessionId]: { segment, metrics, stats, models, taskName, updatedAt } }。
+     * 上限 20 个，超出丢最久未更新的 —— 会话一多不可能无限膨胀 localStorage。
      */
     sessions: {},
 
@@ -100,12 +140,41 @@ function createInitialState(now) {
     today: { date: start },
     /** 收藏库。 */
     collections: [],
+
+    /**
+     * 「是否达到了你想要的目的」的自评记录。
+     *
+     * 形如 { [recordId]: { verdict: 'yes'|'partial'|'no', note, at } }。
+     * verdict 是三档而非布尔 —— 「基本完成但有返工」是最常见的真实状态，
+     * 压成 boolean 会把它逼成两端之一，统计随即失真。
+     */
+    verdicts: {},
+
+    /**
+     * 「这次任务用哪个模型得心应手」的自评备注。
+     *
+     * 形如 { [modelKey]: { rating, notes: [{ recordId, taskName, rating, note, at }] } }。
+     *
+     * ⚠ 这里**不做**「自动判断哪个模型擅长什么」：我们只有耗时、首 token 延迟、
+     * 解码速度这类客观量，没有质量信号。任何自动结论都是伪科学。所以只存人写的。
+     */
+    modelNotes: {},
+
     /** 本地埋点：阈值提醒触发 / 用户打开记录卡。 */
     telemetry: { impressions: 0, opens: 0 },
     /** 纯 UI 态（不跨会话持久有意义，但放一起省一个 store）。 */
     ui: {
       cardOpen: false,
       galleryOpen: false,
+      /** 汇总面板（模型实用性总览）。 */
+      summaryOpen: false,
+      /**
+       * 记录卡当前聚焦的收藏 id。
+       *
+       * 从画廊点「回看」进来时带上，卡片据此渲染那条记录而不是「当前时段」；
+       * 手动打开卡片时置空。
+       */
+      focusedRecordId: null,
       /**
        * 右上角提醒卡（ADR-123）。
        *
@@ -156,6 +225,16 @@ function createActions() {
     /** 打开/关闭画廊。 */
     setGalleryOpen(draft, open) {
       draft.ui.galleryOpen = open === true;
+    },
+
+    /** 打开/关闭汇总面板（模型实用性总览）。 */
+    setSummaryOpen(draft, open) {
+      draft.ui.summaryOpen = open === true;
+    },
+
+    /** 打开记录卡时可指定聚焦哪条收藏（画廊里点「回看」进来时用）。 */
+    setFocusedRecord(draft, id) {
+      draft.ui.focusedRecordId = typeof id === 'string' && id.length > 0 ? id : null;
     },
 
     /**
@@ -242,17 +321,7 @@ function createActions() {
         draft.sessions[sessionId].updatedAt = payload.now;
         return;
       }
-      draft.sessions[sessionId] = {
-        segment: {
-          startedAt: payload.now,
-          lastActiveAt: payload.now,
-          activeMs: 0,
-          activeRuns: 0,
-          firedCount: 0,
-        },
-        metrics: null,
-        updatedAt: payload.now,
-      };
+      draft.sessions[sessionId] = emptyBucket(payload.now);
       // 分区上限：超出时丢最久没更新的那个（当前会话永不丢）。
       const ids = Object.keys(draft.sessions);
       if (ids.length > 20) {
@@ -267,7 +336,9 @@ function createActions() {
      * 只更新某个会话的计时分区（不动指针）。
      *
      * @param draft - immer draft。
-     * @param payload - { sessionId, segment?, metrics?, now? }
+     * @param payload - { sessionId, segment?, metrics?, stats?, models?,
+     *   taskName?, now? }
+     *   各字段 undefined 表示「这次不碰它」，所以探针可以只推变化的部分。
      */
     writeSession(draft, payload) {
       const sessionId = payload.sessionId;
@@ -277,23 +348,111 @@ function createActions() {
       if (draft.sessions === null || typeof draft.sessions !== 'object') draft.sessions = {};
       // 分区可能还不存在：探针可能先于 sessions.list 的 sync 到达。
       // 这时建一个空分区再写，绝不借用别的会话的时长。
-      if (draft.sessions[sessionId] === undefined) {
-        draft.sessions[sessionId] = {
-          segment: {
-            startedAt: now,
-            lastActiveAt: now,
-            activeMs: 0,
-            activeRuns: 0,
-            firedCount: 0,
-          },
-          metrics: null,
-          updatedAt: now,
-        };
-      }
+      if (draft.sessions[sessionId] === undefined) draft.sessions[sessionId] = emptyBucket(now);
       const bucket = draft.sessions[sessionId];
       if (payload.segment !== undefined) bucket.segment = payload.segment;
       if (payload.metrics !== undefined) bucket.metrics = payload.metrics;
+      if (payload.stats !== undefined) bucket.stats = payload.stats;
+      if (payload.models !== undefined) bucket.models = payload.models;
+      if (payload.taskName !== undefined) bucket.taskName = payload.taskName;
       bucket.updatedAt = now;
+    },
+
+    /**
+     * 记「此刻在用哪个模型」。
+     *
+     * 与 models 的分工：这里是**当下**（记录卡顶部那行模型名、下一次请求会用
+     * 什么），models 是**累计**（谁各用了多久）。前者每轮会变，后者只增。
+     *
+     * @param draft - immer draft。
+     * @param payload - { sessionId, model: { provider, model, key }, now? }
+     */
+    setSessionModel(draft, payload) {
+      const sessionId = payload?.sessionId;
+      const model = payload?.model;
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+      if (model === null || typeof model !== 'object') return;
+      if (typeof model.provider !== 'string' || model.provider.length === 0) return;
+      if (typeof model.model !== 'string' || model.model.length === 0) return;
+      const now = typeof payload.now === 'number' ? payload.now : Date.now();
+      if (draft.sessions === null || typeof draft.sessions !== 'object') draft.sessions = {};
+      if (draft.sessions[sessionId] === undefined) draft.sessions[sessionId] = emptyBucket(now);
+      draft.sessions[sessionId].currentModel = {
+        provider: model.provider,
+        model: model.model,
+        key: typeof model.key === 'string' && model.key.length > 0 ? model.key : `${model.provider}/${model.model}`,
+        reasoningEffort: typeof model.reasoningEffort === 'string' ? model.reasoningEffort : null,
+        at: now,
+      };
+      draft.sessions[sessionId].updatedAt = now;
+    },
+
+    /**
+     * 记一次「达到了你想要的目的吗」的自评。
+     *
+     * 三档：yes / partial / no。压成 boolean 是错的 —— 「基本做完但有返工」是
+     * 最常见的真实状态，逼进两端会让后面的统计失真。
+     *
+     * @param draft - immer draft。
+     * @param payload - { recordId: string, verdict: 'yes'|'partial'|'no',
+     *   note?: string, now?: number }
+     */
+    setVerdict(draft, payload) {
+      const id = payload?.recordId;
+      if (typeof id !== 'string' || id.length === 0) return;
+      const verdict = payload?.verdict;
+      if (verdict !== 'yes' && verdict !== 'partial' && verdict !== 'no') return;
+      if (draft.verdicts === null || typeof draft.verdicts !== 'object') draft.verdicts = {};
+      const note = typeof payload.note === 'string' ? payload.note.slice(0, MODEL_NOTE_LIMIT) : '';
+      draft.verdicts[id] = {
+        verdict,
+        note,
+        at: typeof payload.now === 'number' ? payload.now : Date.now(),
+      };
+    },
+
+    /** 撤销一条自评（用户想改主意时）。 */
+    clearVerdict(draft, recordId) {
+      if (draft.verdicts === null || typeof draft.verdicts !== 'object') return;
+      delete draft.verdicts[recordId];
+    },
+
+    /**
+     * 记一条「这个模型在这次任务里得心应手吗」的备注。
+     *
+     * @param draft - immer draft。
+     * @param payload - { modelKey: string, rating: 1..5, note?: string,
+     *   recordId?: string, taskName?: string, now?: number }
+     */
+    addModelNote(draft, payload) {
+      const key = payload?.modelKey;
+      if (typeof key !== 'string' || key.length === 0) return;
+      const rating = Math.round(Number(payload?.rating));
+      if (!Number.isFinite(rating) || rating < 1 || rating > 5) return;
+      if (draft.modelNotes === null || typeof draft.modelNotes !== 'object') draft.modelNotes = {};
+
+      const bucket = draft.modelNotes[key];
+      const notes = Array.isArray(bucket?.notes) ? bucket.notes : [];
+      const now = typeof payload.now === 'number' ? payload.now : Date.now();
+      const entry = {
+        recordId: typeof payload.recordId === 'string' ? payload.recordId : null,
+        taskName: typeof payload.taskName === 'string' ? payload.taskName : null,
+        rating,
+        note: typeof payload.note === 'string' ? payload.note.slice(0, 200) : '',
+        at: now,
+      };
+      // 同一份记录、同一模型只留最新一条自评（改了主意就覆盖，不追加矛盾条目）。
+      const kept = notes.filter((item) => !(entry.recordId !== null && item.recordId === entry.recordId));
+      const next = [entry, ...kept];
+      draft.modelNotes[key] = {
+        notes: next.length > MODEL_NOTE_LIMIT ? next.slice(0, MODEL_NOTE_LIMIT) : next,
+      };
+    },
+
+    /** 清空某个模型的全部备注（模型列表里「不再用它了」）。 */
+    clearModelNotes(draft, modelKey) {
+      if (draft.modelNotes === null || typeof draft.modelNotes !== 'object') return;
+      delete draft.modelNotes[modelKey];
     },
 
     /** 跨零点：重置今日统计（时段本身保留）。 */
@@ -320,6 +479,8 @@ function createActions() {
       draft.ui = {
         cardOpen: false,
         galleryOpen: false,
+        summaryOpen: false,
+        focusedRecordId: null,
         reminder: null,
       };
     },
@@ -358,6 +519,9 @@ function createActions() {
  *   v3（ADR-123）：光带退役。`ui.hintVisible` / `ui.playSeq` / `ui.toast` /
  *       `settings.intensity` / `telemetry.dismisses` 一并删除，换成
  *       `ui.reminder`（右上角提醒卡）。
+ *   v4（本次改版）：分区扩成 `{ segment, metrics, stats, models, taskName }`；
+ *       顶层新增 `verdicts` / `modelNotes`；`ui` 新增 `summaryOpen` /
+ *       `focusedRecordId`；`settings.showInlineTimer` 退役，换 `showCornerMeter`。
  *
  * 迁移策略：缺什么补什么，**绝不因为字段缺失就丢掉用户数据**。
  *   - v1 的顶层 `metrics.sessionId` 记录着那份时长属于哪个会话 —— 这是唯一
@@ -386,6 +550,8 @@ function migrateState(raw, now) {
   // v3 起强度设置随光带退役；旧数据里留着这个键只会造成「设置了却没效果」
   // 的假象，迁移时删干净。
   delete merged.settings.intensity;
+  // v4 起常驻计时从输入框搬到右上角；旧键留着会让设置行显示一个已不存在的开关。
+  delete merged.settings.showInlineTimer;
 
   // ── ui：提醒卡时代的形状。旧键（hintVisible/playSeq/toast）一律丢弃 ──
   // 语义见 resetTransient —— 它们只在页面生命周期内有意义，跨恢复必须清。
@@ -394,7 +560,10 @@ function migrateState(raw, now) {
     merged.ui.cardOpen = raw.ui.cardOpen === true;
     merged.ui.galleryOpen = raw.ui.galleryOpen === true;
   }
+  // 这三个只在本次页面生命周期内有意义，跨恢复一律回初值（理由同 reminder）。
   merged.ui.reminder = null;
+  merged.ui.summaryOpen = false;
+  merged.ui.focusedRecordId = null;
 
   // ── 分区表：这一步是崩溃的根因，必须保证它一定是对象 ──────────────
   const sessions = {};
@@ -402,12 +571,31 @@ function migrateState(raw, now) {
     for (const id of Object.keys(raw.sessions)) {
       const bucket = raw.sessions[id];
       if (bucket === null || typeof bucket !== 'object') continue;
+      // 逐字段兜底而不是浅拷贝整个 bucket：v3 的 bucket 缺 stats/models/
+      // taskName，直接展开会把 undefined 写进 store，UI 读到 undefined 后
+      // 再去 .entries 就会抛。
       sessions[id] = {
         segment:
           bucket.segment !== null && typeof bucket.segment === 'object'
             ? { ...emptySegment(now), ...bucket.segment }
             : emptySegment(now),
         metrics: bucket.metrics ?? null,
+        stats: bucket.stats !== null && typeof bucket.stats === 'object' ? bucket.stats : null,
+        models: modelEntriesFromArray(bucket.models),
+        taskName: typeof bucket.taskName === 'string' ? bucket.taskName : null,
+        currentModel:
+          bucket.currentModel !== null && typeof bucket.currentModel === 'object'
+            ? {
+                provider: String(bucket.currentModel.provider ?? ''),
+                model: String(bucket.currentModel.model ?? ''),
+                key: String(bucket.currentModel.key ?? ''),
+                reasoningEffort:
+                  typeof bucket.currentModel.reasoningEffort === 'string'
+                    ? bucket.currentModel.reasoningEffort
+                    : null,
+                at: Number.isFinite(bucket.currentModel.at) ? bucket.currentModel.at : now,
+              }
+            : null,
         updatedAt: Number.isFinite(bucket.updatedAt) ? bucket.updatedAt : now,
       };
     }
@@ -424,6 +612,9 @@ function migrateState(raw, now) {
     sessions[legacyId] = {
       segment: { ...emptySegment(now), ...legacySegment },
       metrics: legacyMetrics,
+      stats: null,
+      models: [],
+      taskName: null,
       updatedAt: Number.isFinite(legacySegment.lastActiveAt) ? legacySegment.lastActiveAt : now,
     };
   }
@@ -442,6 +633,46 @@ function migrateState(raw, now) {
 
   merged.today = raw.today !== null && typeof raw.today === 'object' ? raw.today : fresh.today;
   merged.collections = Array.isArray(raw.collections) ? raw.collections : [];
+
+  // ── v4 新增的两个自评表 ────────────────────────────────────────────
+  // 它们是「人写的判断」，不是派生数据，迁移时逐条校验而不是整体搬 —— 一个坏
+  // 条目不该连累整张表，也不该因为形状怪就被原样存回去再在 UI 里炸。
+  merged.verdicts = {};
+  if (raw.verdicts !== null && typeof raw.verdicts === 'object' && !Array.isArray(raw.verdicts)) {
+    for (const id of Object.keys(raw.verdicts)) {
+      const item = raw.verdicts[id];
+      if (item === null || typeof item !== 'object') continue;
+      if (item.verdict !== 'yes' && item.verdict !== 'partial' && item.verdict !== 'no') continue;
+      merged.verdicts[id] = {
+        verdict: item.verdict,
+        note: typeof item.note === 'string' ? item.note : '',
+        at: Number.isFinite(item.at) ? item.at : now,
+      };
+    }
+  }
+
+  merged.modelNotes = {};
+  if (raw.modelNotes !== null && typeof raw.modelNotes === 'object' && !Array.isArray(raw.modelNotes)) {
+    for (const key of Object.keys(raw.modelNotes)) {
+      const bucket = raw.modelNotes[key];
+      const notes = Array.isArray(bucket?.notes) ? bucket.notes : [];
+      const kept = notes
+        .filter((item) => item !== null && typeof item === 'object')
+        .map((item) => ({
+          recordId: typeof item.recordId === 'string' ? item.recordId : null,
+          taskName: typeof item.taskName === 'string' ? item.taskName : null,
+          rating: Math.min(5, Math.max(1, Math.round(Number(item.rating)) || 3)),
+          note: typeof item.note === 'string' ? item.note : '',
+          at: Number.isFinite(item.at) ? item.at : now,
+        }));
+      if (kept.length > 0) {
+        merged.modelNotes[key] = {
+          notes: kept.length > MODEL_NOTE_LIMIT ? kept.slice(0, MODEL_NOTE_LIMIT) : kept,
+        };
+      }
+    }
+  }
+
   // telemetry 兜底：v2 及更早有 dismisses，v3 删了 —— 合并后再按 fresh 的形状
   // 拷贝一遍，多余键自然剥落；缺的键（如旧版本没有 opens）用 0 补上。
   merged.telemetry =

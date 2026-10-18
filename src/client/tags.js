@@ -71,3 +71,39 @@ function tagsOf(startedAt, activeMs) {
   if (length !== null) result.push(length);
   return result;
 }
+
+/**
+ * 对一组条目求某个字段之和。
+ *
+ * 刻意忽略非有限值与负值 —— 数据可能来自持久化恢复（脏数据）或投影降级，
+ * 让它们污染总和会直接显示成一个荒谬的数字。宁可少算，不可显示 NaN。
+ *
+ * @param entries - 条目数组（可能不是数组）。
+ * @param field - 字段名。
+ * @returns 总和（非负有限数）。
+ */
+function sumField(entries, field) {
+  const list = Array.isArray(entries) ? entries : [];
+  let sum = 0;
+  for (const entry of list) {
+    const value = entry === null || entry === undefined ? undefined : entry[field];
+    if (Number.isFinite(value) && value > 0) sum += value;
+  }
+  return sum;
+}
+
+/**
+ * 把平均评分渲染成一句话。
+ *
+ * 用「4.2」而不是星星：星级在 4.2 的情况下无法表达，而数字能。
+ * 低于 3.0 时不必显示 —— 两三条备注的平均值没有意义，容易被误读成定论。
+ *
+ * @param value - 平均分。
+ * @param t - 翻译函数。
+ * @returns 文案。
+ */
+function ratingText(value, t) {
+  if (!Number.isFinite(value) || value < 3) return '';
+  const rounded = Math.round(value * 10) / 10;
+  return t('card.rating.summary', { score: rounded.toFixed(1) });
+}

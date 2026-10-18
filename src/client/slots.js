@@ -81,7 +81,7 @@ function registerSlots(params) {
   const { ctx, React, actions, translator, handlers } = params;
   const h = React.createElement;
 
-  // ① shell.overlay：记录卡 + 画廊 + 右上角提醒卡 ────────────────────
+  // ① shell.overlay：记录卡 + 画廊 + 右上角读数 + 提醒卡 ────────────
   ctx.slots.inject('shell.overlay', () =>
     ctx.slots.register(
       { name: 'shell.overlay', id: 'immersion-glow.layer', order: 100 },
@@ -92,21 +92,38 @@ function registerSlots(params) {
         // 分区随 activeSessionId / sessions 变化，selector 两个都要选到。
         const activeSessionId = useImmersionGlow((value) => value.activeSessionId);
         const sessionsMap = useImmersionGlow((value) => value.sessions);
-        const durationText = React.useMemo(() => {
-          const seg = (sessionsMap?.[activeSessionId] || {}).segment;
-          return formatDuration(seg === undefined ? 0 : seg.activeMs, t);
-        }, [sessionsMap, activeSessionId, t]);
-
         const reminder = useImmersionGlow((value) => value.ui.reminder);
+        const summaryOpen = useImmersionGlow((value) => value.ui.summaryOpen);
+
         // 记录卡的时段标签从分区起止时间推导（tagsOf），必须把分区本体传下去。
-        const segment = React.useMemo(() => {
-          const seg = (sessionsMap?.[activeSessionId] || {}).segment;
-          return seg ?? { startedAt: 0, lastActiveAt: 0, activeMs: 0, activeRuns: 0, firedCount: 0 };
+        // 时长读数也一并算好 —— hud 与 record-card 共用同一口径，避免两处各算一遍
+        // 出现「右上角 8 分钟、卡片里 7 分钟」这种自相矛盾。
+        const bucket = React.useMemo(() => {
+          const found = sessionsMap?.[activeSessionId];
+          return found === undefined ? null : found;
         }, [sessionsMap, activeSessionId]);
-        const metrics = React.useMemo(() => {
-          const bucket = sessionsMap?.[activeSessionId];
-          return bucket === undefined ? null : bucket.metrics;
-        }, [sessionsMap, activeSessionId]);
+
+        const durationMs = React.useMemo(
+          () => (bucket?.segment === undefined ? 0 : bucket.segment.activeMs),
+          [bucket],
+        );
+        const durationText = React.useMemo(() => formatDuration(durationMs, t), [durationMs, t]);
+
+        // 模型级条目：分区里存的是数组（可持久化），这里转成渲染要的形态。
+        const entries = React.useMemo(
+          () => modelEntriesFromArray(bucket?.models),
+          [bucket],
+        );
+
+        const metrics = bucket?.metrics ?? null;
+        const currentModel = bucket?.currentModel ?? null;
+        // 「发起过询问」标志：记录卡与右上角都用它判断该不该显示数据。
+        const started = isTaskStarted(bucket);
+
+        const hudBucket = React.useMemo(
+          () => (bucket === null ? null : { ...bucket, started }),
+          [bucket, started],
+        );
 
         // ── stale 判定（ADR-123）────────────────────────────────────
         // root 作用域没有 props.sessionId；「当前会话」由 useSessions 的
@@ -121,37 +138,46 @@ function registerSlots(params) {
         const stale =
           metrics === null
             ? false
-            : metrics.sessionId === null ||
-              currentId === null ||
-              metrics.sessionId !== currentId;
+            : metrics.sessionId === null || currentId === null || metrics.sessionId !== currentId;
+
+        const actionsRef = props.immersionGlowActions ?? actions;
 
         const shared = {
           React,
           t,
           useImmersionGlow,
-          actions: props.immersionGlowActions ?? actions,
+          actions: actionsRef,
           durationText,
           stale,
           handlers,
-          segment,
+          bucket,
+          entries,
           metrics,
         };
 
-        // 提醒卡（ADR-123）：倒计时 / 未读徽标都封装在 ReminderCard 里，
-        // 这层只负责「有提醒就挂上」。key=seq 让新提醒强制重挂，组件里的
-        // 本地计时状态随之复位。
         return h(
           React.Fragment,
           null,
-          h(RecordCard, shared),
-          h(Gallery, shared),
+          // 记录卡与汇总互斥：两个都是模态层，同时开会叠在一起。
+          h(RecordCard, {
+            ...shared,
+            // 焦点钩子：gallery 点「回看」时由 handlers.reviewRecord 打开。
+          }),
+          h(Gallery, { ...shared, actions: actionsRef }),
+          summaryOpen ? h(Summary, shared) : null,
+          h(CornerMeter, {
+            ...shared,
+            bucket: hudBucket,
+            stats: bucket?.stats ?? null,
+            currentModel,
+          }),
           reminder !== null && reminder !== undefined
             ? h(ReminderCard, {
                 key: reminder.seq,
                 React,
                 t,
                 reminder,
-                actions: props.immersionGlowActions ?? actions,
+                actions: actionsRef,
               })
             : null,
         );
@@ -175,41 +201,37 @@ function registerSlots(params) {
             actions.setCardOpen(false);
             actions.setGalleryOpen(true);
           },
+          onOpenSummary: handlers.openSummary,
         });
       },
     ),
   );
 
-  // ── ③ conversation.input.left：探针（默认 null） ───────────────────
+  // ── ③ conversation.input.left：探针（永远返回 null） ───────────────
   ctx.slots.inject('conversation.input.left', () =>
     ctx.slots.register(
       { name: 'conversation.input.left', id: 'immersion-glow.probe', order: 100 },
       function ImmersionProbe(props) {
-        const t = translator();
-
         // session 作用域的 standard props 里有 `sessionId: SessionId` —— 宿主
         // 直接给的、比在 root 侧反推更权威。探针每次渲染都把它认领回 root，
         // 于是即便 sessions.list 的解析在某个版本失效，分区指针仍然能切对。
         // （认领是幂等的：同一个 id 再 switchSession 只是刷新 updatedAt。）
         claimSessionFromProps(props.immersionGlowActions ?? actions, props, Date.now());
 
-        const durationText = props.useImmersionGlow((value) => {
-          // 常驻计时读**当前会话的分区**，不是顶层 segment。
-          const seg = (value.sessions?.[value.activeSessionId] || {}).segment;
-          return formatDuration(seg === undefined ? 0 : seg.activeMs, t);
-        });
-        const showInlineTimer = props.useImmersionGlow((value) => value.settings.showInlineTimer);
+        // v4：探针不再渲染任何东西（时间搬去了右上角），只负责把 session 作用域
+        // 才有的数据泵回 root。所以这里不需要 durationText / showInlineTimer。
         return h(SessionProbe, {
           React,
-          t,
+          t: translator(),
           // 计数的真实数据源：ui-chat 注入的 chat 快照（useSession 的
           // ConversationSnapshot 只有控制字段，数节点恒为 0 —— ADR-123）。
           useChat: props.useChat,
           useSession: props.useSession,
+          // v4 新增：sessionStats / modelSelection / tokenUsage 三个投影。
+          // 已核实这三个都在 conversation.input.left 的 standardProps 里。
+          useProjection: props.useProjection,
           useImmersionGlow: props.useImmersionGlow,
           actions: props.immersionGlowActions ?? actions,
-          showInlineTimer,
-          durationText,
           sessionId: props.sessionId,
         });
       },

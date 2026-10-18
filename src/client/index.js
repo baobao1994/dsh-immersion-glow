@@ -321,11 +321,37 @@ function apply(ctx) {
   const handlers = {
     openCard: () => {
       actions.countOpen();
+      // 手动打开 = 看「当前这次」，所以清掉可能残留的聚焦。
+      actions.setFocusedRecord(null);
       actions.setCardOpen(true);
     },
     closeCard: () => actions.setCardOpen(false),
     openGallery: () => actions.setGalleryOpen(true),
     closeGallery: () => actions.setGalleryOpen(false),
+    openSummary: () => actions.setSummaryOpen(true),
+    closeSummary: () => actions.setSummaryOpen(false),
+
+    /**
+     * 从画廊「回看」某条收藏：关掉画廊，带焦点打开记录卡。
+     *
+     * 收藏不是静态墓碑 —— 回看之后还能补「达到目的了吗」和模型备注。
+     */
+    reviewRecord: (id) => {
+      actions.countOpen();
+      actions.setGalleryOpen(false);
+      actions.setCardOpen(false);
+      actions.setSummaryOpen(false);
+      actions.setFocusedRecord(id);
+      actions.setCardOpen(true);
+    },
+
+    /** 记「达到了吗」。recordKey 为 'current' 表示正在看还没收藏的当前时段。 */
+    setVerdict: (payload) => actions.setVerdict(payload),
+    clearVerdict: (recordKey) => actions.clearVerdict(recordKey),
+
+    /** 记一条模型自评。 */
+    rateModel: (payload) => actions.addModelNote({ ...payload, now: Date.now() }),
+
     /** 收藏当前时段。 */
     saveCurrentRecord: () => {
       const snapshot = state();
@@ -333,13 +359,34 @@ function apply(ctx) {
       const record = toRecord(bucket.segment, bucket.metrics, Date.now());
       const t = translator();
       if (record === null) return;
+
+      // 分区里已经存着探针推导好的条目，这里只需校验形状。
+      const entries = modelEntriesFromArray(bucket.models ?? []);
+      // 收藏 id 在这里生成（而不是让 action 内部生成），因为紧接着的「把
+      // 当前时段的自评迁到这条收藏」需要用到它。actions 拿不到返回值。
+      const recordId = `r${record.createdAt}${snapshot.collections.length}`;
       actions.saveRecord({
         ...record,
+        id: recordId,
+        // 任务名与模型明细一起存进收藏，这样画廊/汇总不需要回查会话就能渲染。
+        taskName: typeof bucket.taskName === 'string' ? bucket.taskName : null,
+        models: entries,
+        stats: bucket.stats ?? null,
         tags: tagsOf(bucket.segment.startedAt, bucket.segment.activeMs),
       });
-      // 确认走同一张提醒卡（非 sticky：到点即消失，不产生未读）。
+      // 把当前时段已有的自评迁到这条收藏上，否则「收藏后再评价」会记到
+      // 'current' 这个假 key 上，收藏里看不到。
+      const currentVerdict = snapshot.verdicts?.current;
+      if (currentVerdict !== null && currentVerdict !== undefined) {
+        actions.setVerdict({
+          recordId,
+          verdict: currentVerdict.verdict,
+          note: currentVerdict.note,
+        });
+      }
       actions.showReminder({ message: t('card.saved') });
     },
+
     /** 复制统计 JSON 到剪贴板（PRD §4.9）。 */
     copyStats: async () => {
       const payload = buildStatsPayload(state(), Date.now());

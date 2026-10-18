@@ -357,6 +357,260 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   background: var(--dsw-alias-text-brand, #539cfa);
 }
 
+/* ── 右上角常驻读数（v4）────────────────────────────────────────── */
+/*
+ * 收拢态刻意只有「模型名 · 耗时」两个信息量。它必须是环境的一部分而不是一个
+ * 仪表盘：多放一个数字，它就从背景变成干扰。
+ *
+ * 层级：底板 blur(18px) + 一道极细描边。与提醒卡共用同一套材质语言，但弱一档
+ * —— 提醒是事件（该停下），读数是常态（一直在）。
+ */
+.ig-hud {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 8px;
+  border-radius: var(--dsw-radius-full, 999px);
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.24));
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.1));
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  animation: ig-hud-in 0.32s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+@keyframes ig-hud-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ig-hud:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+.ig-hud:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+/*
+ * 小圆点：不随时间变化地亮着，像一个「正在计」的指示灯。用 tertiary 而不是
+ * brand 色 —— brand 是提醒的语义，读数不该占用它。
+ */
+.ig-hud-dot {
+  inline-size: 5px;
+  block-size: 5px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
+.ig-hud-model {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-hud-time {
+  color: var(--dsw-alias-label-primary, currentColor);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展开态：从收拢的那个圆点长出来，视觉上是同一个东西打开了。 */
+.ig-hud-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  pointer-events: auto;
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--dsw-radius-lg, 14px);
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.12));
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  color: var(--dsw-alias-label-primary, currentColor);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  animation: ig-hud-panel-in 0.3s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+@keyframes ig-hud-panel-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ig-hud-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ig-hud-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ig-hud-title {
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+}
+
+/* 任务名：两行截断。副标题形态 —— 它是定位信息，不该比标题重。 */
+.ig-hud-subtitle {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ig-hud-collapse {
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  line-height: 18px;
+  padding: 1px 7px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  flex: none;
+}
+
+.ig-hud-collapse:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+/*
+ * 占比条：整条按模型分段，flex-grow 承担比例。
+ * 高度 4px —— 再高就成了图表，而这里只需要一个「大致比例」的感觉。
+ */
+.ig-hud-bar {
+  display: flex;
+  gap: 1px;
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+}
+
+.ig-hud-seg {
+  background: var(--dsw-alias-text-brand, #539cfa);
+  border-radius: 1px;
+  min-width: 2px;
+  height: 100%;
+}
+
+/* 多模型时用不同色相区分：相邻色相，比彩虹好读。 */
+.ig-hud-seg:nth-child(2n) { background: var(--dsw-static-neutral-bluish-400, #7c9cff); }
+.ig-hud-seg:nth-child(3n) { background: var(--dsw-alias-text-success, #3fa672); }
+
+.ig-hud-figures {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.ig-hud-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-module-platform, rgba(128, 128, 128, 0.08));
+  min-width: 0;
+}
+
+.ig-hud-figure dt {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+}
+
+.ig-hud-figure dd {
+  font-size: 15px;
+  line-height: 21px;
+  font-weight: 500;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ig-hud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ig-hud-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-radius: var(--dsw-radius-sm, 6px);
+  min-width: 0;
+}
+
+.ig-hud-row + .ig-hud-row {
+  border-top: 0.5px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.16));
+}
+
+.ig-hud-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ig-hud-row-model {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 19px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-hud-row-time {
+  font-size: 13px;
+  line-height: 19px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+.ig-hud-row-sub {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
 /* ── 设置行 ─────────────────────────────────────────────────────── */
 .ig-settings {
   display: flex;
@@ -455,9 +709,388 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   padding: 0 4px;
 }
 
+/* ── 记录卡：任务名 / 模型明细 / 目的确认（v4）───────────────────── */
+
+/*
+ * 任务名是这张卡的主角：它是唯一能让用户「认出这次任务」的东西，所以给它一行
+ * 独立的、可换行的正文样式，而不是塞进指标格。
+ */
+.ig-task {
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.ig-panel-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 汇总面板比记录卡宽：它要并排放三格客观指标，窄了会挤成一团。 */
+.ig-panel--wide {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.ig-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ig-block-title {
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  margin: 0;
+}
+
+/* ── 逐模型明细 ───────────────────────────────────────────────────── */
+.ig-models {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * 每个模型一块独立底板而不是一条分隔线：卡片里可能出现 4–6 个模型，分隔线会
+ * 让它读起来像一张表，而它其实是「几张小卡片」。
+ */
+.ig-model {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-module-platform, rgba(128, 128, 128, 0.08));
+  min-width: 0;
+}
+
+.ig-model-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ig-model-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-model-time {
+  font-size: 13px;
+  line-height: 19px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+/* 自评分：不是星星而是「4.2 分」的数字。星级无法表达 4.2。 */
+.ig-model-rating {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--dsw-alias-text-success, #3fa672);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+  padding: 1px 6px;
+  border-radius: var(--dsw-radius-full, 999px);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.ig-model-sub {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
+/* 已有备注：左侧一道竖线，视觉上明确「这是引用，不是本插件的数据」。 */
+.ig-note--quote {
+  border-left: 2px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.24));
+  padding-left: 8px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+}
+
+.ig-model-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+/*
+ * 五档评分按钮：等宽平铺，选中态用 brand 底色。
+ * 文字标签而非星星 —— 「顺手 / 极其顺手」在用户心里有稳定含义，「4 星」没有。
+ */
+.ig-rating {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ig-rating-btn {
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 16px;
+  padding: 3px 8px;
+  border-radius: var(--dsw-radius-full, 999px);
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  cursor: pointer;
+}
+
+.ig-rating-btn:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+.ig-textarea {
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
+  background: var(--dsw-alias-bg-base, transparent);
+  color: var(--dsw-alias-label-primary, currentColor);
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.ig-textarea:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -1px;
+}
+
+.ig-model-add {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 16px;
+  padding: 2px 0;
+  border-radius: var(--dsw-radius-sm, 6px);
+}
+
+.ig-model-add:hover {
+  color: var(--dsw-alias-text-brand, #539cfa);
+}
+
+/* ── 目的确认 ─────────────────────────────────────────────────────── */
+.ig-verdict {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ig-verdict-btn {
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  padding: 5px 12px;
+  border-radius: var(--dsw-radius-full, 999px);
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  cursor: pointer;
+}
+
+.ig-verdict-btn:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+}
+
+.ig-verdict-btn--on {
+  background: var(--dsw-alias-text-brand, #539cfa);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* 画廊行里的达成标记：三档各有语义色，绿 / 黄 / 红。 */
+.ig-verdict-dot {
+  align-self: flex-start;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 7px;
+  border-radius: var(--dsw-radius-full, 999px);
+  flex: none;
+}
+
+.ig-verdict-dot--yes {
+  color: var(--dsw-alias-text-success, #3fa672);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+.ig-verdict-dot--partial {
+  color: var(--dsw-alias-label-warning, #b7791f);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+.ig-verdict-dot--no {
+  color: var(--dsw-alias-label-error, #d64545);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+/* ── 汇总面板 ─────────────────────────────────────────────────────── */
+.ig-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ig-summary-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-module-platform, rgba(128, 128, 128, 0.08));
+  min-width: 0;
+}
+
+.ig-summary-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ig-summary-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-summary-row-time {
+  font-size: 13px;
+  line-height: 19px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+}
+
+.ig-summary-figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.ig-summary-figures > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ig-summary-figures dt {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+  white-space: nowrap;
+}
+
+.ig-summary-figures dd {
+  font-size: 13px;
+  line-height: 18px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ig-summary-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ig-summary-notes li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 8px;
+  border-left: 2px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.24));
+  min-width: 0;
+}
+
+.ig-summary-note-task {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-summary-note-text {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+}
+
+/* ── 画廊：任务名优先 ─────────────────────────────────────────────── */
+.ig-row-title {
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-row-review {
+  flex: none;
+  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 16px;
+  padding: 3px 8px;
+  border-radius: var(--dsw-radius-full, 999px);
+}
+
+.ig-row-review:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
 /* ── 动效偏好 ───────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .ig-reminder,
+  .ig-hud,
+  .ig-hud-panel,
   .ig-panel,
   .ig-panel--closing {
     animation: none;

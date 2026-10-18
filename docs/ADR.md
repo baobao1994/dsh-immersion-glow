@@ -666,3 +666,74 @@ persist 并补迁移，复杂度与「会话提示的时效性」不成比例，
 - metrics.test：补 overrides（{sessionId, hasMore}）用例与垃圾 overrides 防御。
 - 端到端（真实 dsh-client-store + 线上 leveldb 解出的真实 v1 数据）：
   apply ACTIVE、三插槽、迁移保留旧时长、零错误。
+
+---
+
+## ADR-130（v4）：时间读数搬到右上角、发起后才计、加入模型维度与自评
+
+用户诉求四条：① 不在输入框显示时间，挪到右上角（设了阈值才出现）；② 发起询问之前不统计；
+③ 提炼第一次发起的任务名；④ 逐模型耗时 + 「得心应手」与「偏爱的模型」汇总。
+实现上有一处**平台硬约束**改变了 ④ 的方案，先记在这里。
+
+### 浏览器插件拿不到 session 事件流
+
+最初按「订阅 `session/event`，用 `request/header` 确立当前模型、`step/start` 与
+`assistant/message` 划时间窗」实现。写完去核对宿主类型才发现这条路在浏览器半**不存在**：
+
+- 客户端侧 `ISessions` / `ISession`（`dsh-cordis-client-runner` 的声明）只有
+  `list` / `retain` / `retainInfo`，会话对象上只有 `prompt` / `beginSubmission` /
+  `loadOlder` / `rename` / `cancel` 这类**命令**，没有任何事件订阅；
+- `ctx.on('session/event', …)` 只存在于**宿主半**（主进程，`dsh-api-session-controller`
+  里就这么用）。浏览器半拿不到；
+- `useProjection(key)` 只能**读**已注册的投影，不能注册新 fold。
+
+结论：任何「自己 fold 事件流」的浏览器插件设计在这版宿主上都是空中楼阁。
+
+### 改走 chat 快照推导（采纳）
+
+chat 快照本身带齐了推导所需：`legacy.nodes` 里每个 assistant 节点就是一次模型调用，
+带 `timing: { stepStartTime, firstTokenTime, completedTime }`；`trajectory` 投影里的
+assistant 记录带 `providerMetadata: { provider, model }`（取自
+`event.data.message.source`）。
+
+于是 `model-log.js` 从快照推导：计时 `completedTime - stepStartTime`（**与宿主
+`sessionStats` 逐字同口径**），归属优先按 `messageId`、其次按 `seq` 匹配 `trajectory`；
+匹配不到才退回 `modelSelection` 的当前模型，并把 `exact` 标为 false 供 UI 注明是近似。
+既没有路由也没有当前模型时，那次调用**不计入任何模型** —— 归进「未知」桶会污染排行，
+而且它可能属于别的模型。
+
+### ②「发起后才计」的实现
+
+判据是 `isTaskStarted(bucket)`：分区里有 `currentModel` / 非空 `models` /
+`stats.steps|turns|llmMs > 0` 任一即算发起过。**不用「时长 > 0」** —— 后者在发起后、
+模型还没回完的一瞬间是 0，会让读数闪一下再消失。右上角读数与记录卡都受这个判据控制，
+所以「发起之前右上角是干净的」是自然结果，不需要额外的开关。
+
+### ③ 任务名 = 隐私边界的一次显式放宽
+
+旧承诺「绝不触碰正文」，要拿到能认出这次任务的名字只能读首条 user 消息。
+因此把承诺改写成**更窄但明确**的版本：只读首条、只取 text part、只留 60 字。
+README 与 known-limitations 都据此重写。取不到就显示「未命名任务」，不编。
+
+### ④ 汇总明确不做自动判断
+
+可得的只有耗时、首字延迟、解码速度、轮次 —— 全是客观量，**没有质量信号**。
+从耗时反推「擅长写代码」是伪科学，所以汇总只把证据与用户自评并排展示，
+「得心应手 / 偏爱」由用户自己下结论。这一条写进了 UI 文案（`summary.disclaimer`），
+不只是文档。
+
+### 目的确认为什么是三档
+
+「基本做完但有返工」是最常见的真实状态，压成 boolean 会把它逼成两端之一，
+统计随即失真。三档（达到 / 基本达到 / 没达到）保留了这个中间态。
+达成率按「基本达到 = 0.5 分」计，且**分母只算已评价的记录** —— 把「没评」当「没达成」
+会把完成率压到真实水平以下，那是在骗用户。
+
+### 测试
+
+- model-log.test（26 项）：精确归属 / 退回近似 / 两者共存、轮次去重、排序、
+  持久化往返与脏数据丢弃、中断步骤不计耗时、畸形输入不抛。
+- v4-flow.test（14 项）：探针泵数、右上角读数的四个门槛（发起前 / 阈值空 /
+  开关关 / 插件禁用）、自评落盘与覆盖、图层在脏数据下不崩。
+  这批测试当场抓到一个真 bug：`CornerMeter` 里读了一个已删除的 `enabled` 变量，
+  会让展开态面板一渲染就抛 —— 单测覆盖不到「组件真的被渲染」这条路径。
