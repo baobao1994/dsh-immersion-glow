@@ -101,6 +101,46 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
 }
 
+/*
+ * 「返回」按钮（v9 起三个面板统一用它取代 ×）。
+ *
+ * 面板是从计时器**推进**过来的，所以退出动作的语义是「回到上一层」而不是
+ * 「关掉这个东西」。一个向左的尖括号 + 文字，比一个孤零零的 × 更准确地
+ * 表达这个动作 —— × 说的是关闭，返回说的是回去。
+ */
+.ig-panel-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  padding: 4px 8px 4px 5px;
+  border-radius: var(--dsw-radius-sm, 6px);
+}
+
+.ig-panel-back:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+.ig-panel-back:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+
+/* 尖括号：比 SVG 图标轻，且各 WebView 字体对 ‹ 的字形一致，无需额外资源。 */
+.ig-back-icon {
+  font-size: 16px;
+  line-height: 14px;
+  margin-top: -2px;
+}
+
 /* ── 指标栅格 ───────────────────────────────────────────────────── */
 .ig-metrics {
   display: grid;

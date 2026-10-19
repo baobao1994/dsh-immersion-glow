@@ -203,7 +203,12 @@ function Summary(props) {
           h('h2', { className: 'ig-panel-title' }, t('summary.title')),
           h('span', { className: 'ig-task' }, t('summary.subtitle')),
         ),
-        h('button', { type: 'button', className: 'ig-panel-close', onClick: handlers.closeSummary }, t('gallery.back')),
+        h(
+          'button',
+          { type: 'button', className: 'ig-panel-back', onClick: handlers.backToMeter },
+          h('span', { class: 'ig-back-icon', 'aria-hidden': 'true' }, '‹'),
+          t('common.back'),
+        ),
       ),
 
       // ── 达成率 ────────────────────────────────────────────────────

@@ -36,15 +36,15 @@ function loadModule() {
   return exported;
 }
 
-const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP, CONTENT_INSET } = loadModule();
+const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP } = loadModule();
 
 /**
- * 期望偏移 = 外壳底边 + 两段偏移。
+ * 期望偏移 = 外壳底边 + 间隔。
  *
  * 直接引用被测模块导出的常量，而不是把数字抄一遍 —— 间距是纯观感参数，
  * 用户已经来回调过三轮；抄数字的断言会在每次调整时变成一片假红。
  */
-const OFFSET_AFTER_EDGE = EDGE_GAP + CONTENT_INSET;
+const OFFSET_AFTER_EDGE = EDGE_GAP;
 
 /**
  * 造一个假的元素树。
@@ -70,29 +70,56 @@ function fakeTree(spec) {
   return {
     root: {
       querySelectorAll: () => flat.map(make),
+      // 默认没有宿主锚点，走几何兜底路径。
+      querySelector: () => null,
     },
     doc: { defaultView: { innerWidth: vw, innerHeight: vh } },
   };
 }
 
-test('量出最上方的通栏外壳', () => {
+/**
+ * 造一个带宿主锚点的树：`[data-shell-overlay]` 的顶边就是外壳让开的位置。
+ * 这是首选举据 —— 宿主自己声明的契约，不依赖类名或几何猜测。
+ */
+function fakeTreeWithAnchor(anchorTop, vw = 1200, vh = 800) {
+  const anchor = {
+    childElementCount: 1,
+    getBoundingClientRect: () => ({ top: anchorTop, bottom: vh, width: vw, height: vh - anchorTop }),
+  };
+  return {
+    root: {
+      querySelector: (selector) => (selector === '[data-shell-overlay]' ? anchor : null),
+      querySelectorAll: () => [],
+    },
+    doc: { defaultView: { innerWidth: vw, innerHeight: vh } },
+  };
+}
+
+test('量出通栏外壳的底边', () => {
   const { root, doc } = fakeTree({
     nodes: [
       { top: 0, height: 52, width: 1200, children: 5 }, // 外壳
-      { top: 52, height: 700, width: 900, children: 20 }, // 正文
+      { top: 52, height: 700, width: 900, children: 20 }, // 正文（窄，排除）
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE, '外壳底边 + 间距 + 内容区内缩');
+  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE);
 });
 
-test('多个通栏候选时取最靠上的那个', () => {
+// 回归：v8 取的是**最小** bottom，会选中一个比导航栏更高的包装层，
+// 于是无论怎么调 EDGE_GAP 都会被压回去 —— 表现为「越改越往上」。
+// v9 改成取**最大**：问题的本意是「外壳底部在哪」，答案就是最高那个通栏容器。
+test('多个通栏候选时取底边最低的那个（外壳的真实下沿）', () => {
   const { root, doc } = fakeTree({
     nodes: [
-      { top: 0, height: 30, width: 1200, children: 3 },
-      { top: 30, height: 40, width: 1100, children: 3 },
+      { top: 0, height: 24, width: 1200, children: 3 }, // 导航栏上的一行包装层
+      { top: 24, height: 40, width: 1200, children: 3 }, // 导航栏本体，底边 64
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 30 + OFFSET_AFTER_EDGE, '取最小的底边');
+  assert.equal(
+    measureSafeTop(root, doc),
+    64 + OFFSET_AFTER_EDGE,
+    '应取底边 64，而不是更高的 24',
+  );
 });
 
 test('窄容器（按钮条之类）不算外壳', () => {
@@ -214,4 +241,85 @@ test('dispose 可重复调用不抛', () => {
   const dispose = installSafeTop(doc);
   dispose();
   assert.doesNotThrow(() => dispose());
+});
+// ── 首选举据：宿主标记的 data-shell-overlay ──────────────────────────
+
+test('首选 data-shell-overlay 的顶边（宿主自己声明的边界）', () => {
+  const { root, doc } = fakeTreeWithAnchor(56);
+  assert.equal(measureSafeTop(root, doc), 56 + OFFSET_AFTER_EDGE);
+});
+
+test('锚点优先于几何：即使几何给出更小的值也以锚点为准', () => {
+  const { root, doc } = fakeTreeWithAnchor(56);
+  // 塞一个顶边更小的几何候选，锚点仍应胜出。
+  root.querySelectorAll = () => [
+    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 20, width: 1200, height: 20 }) },
+  ];
+  assert.equal(measureSafeTop(root, doc), 56 + OFFSET_AFTER_EDGE, '锚点是宿主契约，优先');
+});
+
+test('锚点被推到异常位置时退回几何（不盲信）', () => {
+  // 锚点在视口很下方（比如全屏模式被布局挪走）—— 这时的值是错的，
+  // 宁可走几何兜底也不要照抄。
+  const { root, doc } = fakeTreeWithAnchor(600);
+  root.querySelectorAll = () => [
+    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 50, width: 1200, height: 50 }) },
+  ];
+  assert.equal(
+    measureSafeTop(root, doc),
+    50 + OFFSET_AFTER_EDGE,
+    '锚点位置异常时走几何',
+  );
+});
+
+test('锚点负坐标（滚出视口）时退回几何', () => {
+  const { root, doc } = fakeTreeWithAnchor(-10);
+  root.querySelectorAll = () => [
+    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 48, width: 1200, height: 48 }) },
+  ];
+  assert.equal(measureSafeTop(root, doc), 48 + OFFSET_AFTER_EDGE);
+});
+
+test('根上没有 querySelector 时安全退回几何路径', () => {
+  const { root, doc } = fakeTree({
+    nodes: [{ top: 0, height: 52, width: 1200, children: 5 }],
+  });
+  delete root.querySelector;
+  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE);
+});
+
+test('querySelector 抛错时不崩（退回几何）', () => {
+  const { root, doc } = fakeTree({
+    nodes: [{ top: 0, height: 52, width: 1200, children: 5 }],
+  });
+  root.querySelector = () => {
+    throw new Error('boom');
+  };
+  // 真实宿主里这不会发生，但测量失败不该把插件打崩 —— 它只是个布局微调。
+  assert.doesNotThrow(() => measureSafeTop(root, doc), '测量失败不该抛');
+});
+
+// ── 方向性回归：偏移越大 = 越靠下 ────────────────────────────────────
+//
+// v8/v9 我连续把偏移调小，以为「数字小 = 下来一点」，实际是「数字小 = 往上」，
+// 用户连三轮反馈「越来越高」。这组测试锁死语义，避免再反。
+
+test('EDGE_GAP 是向下让出的距离：结果 = 外壳底边 + EDGE_GAP', () => {
+  const { root, doc } = fakeTreeWithAnchor(56);
+  const top = measureSafeTop(root, doc);
+  assert.equal(top, 56 + EDGE_GAP, '必须是相加，不是相减');
+  assert.ok(top > 56, '结果必须在外壳底边之下（视觉上更靠下）');
+});
+
+test('偏移量足以离开导航栏：落点在内容区内部', () => {
+  const { root, doc } = fakeTreeWithAnchor(56);
+  const top = measureSafeTop(root, doc);
+  // 至少要让出 20px 才算「在对话框内部」，否则仍像贴着导航栏。
+  assert.ok(top - 56 >= 20, `落点应明显低于导航栏下沿，实际只差 ${top - 56}px`);
+});
+
+test('兜底值也落在内容区（不小于外壳 + 一档偏移）', () => {
+  const { root, doc } = fakeTree({ nodes: [] });
+  const top = measureSafeTop(root, doc);
+  assert.ok(top >= 56 + 10, `兜底值 ${top} 应落在内容区，而不是贴着顶端`);
 });

@@ -333,7 +333,14 @@ function RecordCard(props) {
             taskName === null ? t('card.untitled') : taskName,
           ),
         ),
-        h('button', { type: 'button', className: 'ig-panel-close', onClick: close }, t('card.close')),
+        // 「返回」而不是「×」（v9）：面板是从计时器推进过来的，× 语义是
+        // 「关闭这个东西」，返回的语义是「回到上一层」—— 后者才对应用户的动作。
+        h(
+          'button',
+          { type: 'button', className: 'ig-panel-back', onClick: handlers.backToMeter },
+          h('span', { class: 'ig-back-icon', 'aria-hidden': 'true' }, '‹'),
+          t('common.back'),
+        ),
       ),
 
       // ── 总账 ──────────────────────────────────────────────────────

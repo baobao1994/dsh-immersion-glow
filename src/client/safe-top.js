@@ -30,20 +30,25 @@
  */
 
 /** 找不到可测量目标时的兜底偏移（px）。 */
-const FALLBACK_TOP = 44;
+/**
+ * 从外壳底边（导航栏下沿）向下让出的距离（px）。
+ *
+ * ⚠⚠ **数值越大 = 视觉上越靠下**。这是 `top` 的语义：它是「距容器顶部的距离」。
+ *
+ * v9 之前我把 28 → 14 → 10 一路调小，本意是「让它下来一点」，实际效果是
+ * **一路往上推** —— 用户连着三轮反馈「越来越高」，我才发现方向弄反了。
+ * 留下这行注释就是为了不再犯：要下来就**加大**这个数。
+ *
+ * 32px 约等于对话区顶部留白的一行半，落点明确在内容区内部而不是贴着导航栏。
+ */
+const EDGE_GAP = 32;
 
 /**
- * 挂在最上方通栏容器底边之下的偏移（px），含两部分。
+ * 无候选时的兜底偏移（px）。
  *
- * v7 用了 16px（≈一个正文行距）+ 12px 间距，用户连着两轮反馈「还是偏高、
- * 还要下来一些」。所以压到 **EDGE_GAP 8px + CONTENT_INSET 6px = 14px**：
- * 仍与外壳留出可见间隔（避免边框视觉上贴着导航栏下沿），但整体低了一档。
- *
- * 数值本身是纯观感判断；判据（怎么量出外壳底边）在 measureSafeTop 里，
- * 与这两个常量分开，调这里不影响测量逻辑。
+ * 标题行 30px + EDGE_GAP 的量级。同样遵循「越大越靠下」。
  */
-const EDGE_GAP = 8;
-const CONTENT_INSET = 6;
+const FALLBACK_TOP = 68;
 
 /**
  * 在一个元素的几何范围内寻找「最上方的横向外壳」。
@@ -68,8 +73,38 @@ function measureSafeTop(root, doc) {
   }
   if (vw <= 0 || vh <= 0) return FALLBACK_TOP;
 
-  // ⚠ 初值必须是 0（= 还没找到），不能是 FALLBACK_TOP。用兜底值当初值的话，
-  // 「一个候选都没找到」会返回 FALLBACK_TOP + 12，偏移凭空多出一截。
+  // ── 判据一（首选）：宿主明确标记的边界 ────────────────────────────
+  //
+  // 已核实 0.2.0-rc.2：`data-shell-overlay` 是 shell.overlay 所在的浮层容器，
+  // 它的顶边就是「外壳（导航栏）已经让开、内容开始」的位置。这是宿主自己声明的
+  // 契约，比任何几何猜测都准，也不怕类名改动。
+  // querySelector 包在 try 里：这一层只是「锦上添花的更准路径」，它坏了
+  // 不该让整个测量失败 —— 下面的几何兜底完全够用。测量失败也不该把插件打崩，
+  // 它只影响一个布局微调。
+  let anchor = null;
+  try {
+    anchor =
+      typeof root.querySelector === 'function'
+        ? root.querySelector('[data-shell-overlay]') ?? null
+        : null;
+  } catch (_error) {
+    anchor = null;
+  }
+  if (anchor !== null && typeof anchor.getBoundingClientRect === 'function') {
+    const rect = anchor.getBoundingClientRect();
+    // 只有当它确实从顶端附近开始时才认 —— 万一它被布局推到别处（比如全屏模式），
+    // 这个值就是错的，宁可走几何兜底。
+    if (Number.isFinite(rect.top) && rect.top >= 0 && rect.top <= vh * 0.25) {
+      return Math.ceil(rect.top) + EDGE_GAP;
+    }
+  }
+
+  // ── 判据二（兜底）：几何 ───────────────────────────────────────────
+  //
+  // ⚠ 这里取的是**最大的** bottom，不是最小的 —— 上一版取最小，结果会选中一个
+  // 比导航栏更高的包装层（某个只有十几像素高的行容器），于是无论怎么调 EDGE_GAP
+  // 都会被它压回去，表现为「越改越往上」。正确的问题是「外壳底部在哪」，
+  // 答案就是最高的那个通栏容器的底边。
   let best = 0;
   // 只看前若干个元素：外壳类容器极少，通读整个 DOM 反而可能命中聊天区的某个
   // 恰好又宽又靠上的东西。上限同时是性能保险。
@@ -87,11 +122,10 @@ function measureSafeTop(root, doc) {
     if (rect.height <= 0 || rect.height >= vh * 0.5) continue;
 
     const bottom = rect.bottom;
-    // 只认「离顶端最近的那个」：多个候选里取最小的 bottom，避免把正文容器算进来。
-    if (bottom > 0 && (best === 0 || bottom < best)) best = bottom;
+    if (bottom > 0 && bottom > best) best = bottom;
   }
-  // 一个候选都没有 → 兜底；有候选 → 底边 + 间隔 + 内容区内缩。
-  return best === 0 ? FALLBACK_TOP : Math.ceil(best) + EDGE_GAP + CONTENT_INSET;
+  // 一个候选都没有 → 兜底；有候选 → 底边 + 间隔。
+  return best === 0 ? FALLBACK_TOP : Math.ceil(best) + EDGE_GAP;
 }
 
 /**

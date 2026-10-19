@@ -118,7 +118,12 @@ function Gallery(props) {
         'div',
         { className: 'ig-panel-head' },
         h('h2', { className: 'ig-panel-title' }, t('gallery.title')),
-        h('button', { type: 'button', className: 'ig-panel-close', onClick: handlers.closeGallery }, t('gallery.back')),
+        h(
+          'button',
+          { type: 'button', className: 'ig-panel-back', onClick: handlers.backToMeter },
+          h('span', { class: 'ig-back-icon', 'aria-hidden': 'true' }, '‹'),
+          t('common.back'),
+        ),
       ),
       h('p', { className: 'ig-note' }, t('gallery.count', { n: collections.length })),
       collections.length === 0

@@ -337,34 +337,32 @@ function apply(ctx) {
       actions.setCardOpen(true);
     },
     /**
-     * 收起面板后回到**展开态**的计时器，而不是收拢态。
+     * 从任何面板「返回」到展开态的计时器。
      *
-     * 为什么：用户刚从记录卡/汇总里看完，注意力还在这一块。塌回一行小球等于
-     * 逼他再点一次才能继续看；而「回到我刚才的位置」是更符合预期的行为。
-     * `setMeterOpen(true)` 同时保证下方的收拢态不会闪现一瞬。
+     * 这是面板的唯一退出路径（顶部的「返回」按钮、以及点空白）。三件事一起做：
+     * 关掉面板、把计时器展开、聚焦记录清空（否则下次打开记录卡还会停在
+     * 「回看某条收藏」的语境里）。
      */
-    closeCard: () => {
+    backToMeter: () => {
       actions.setCardOpen(false);
+      actions.setGalleryOpen(false);
+      actions.setSummaryOpen(false);
       actions.setMeterOpen(true);
+      actions.setFocusedRecord(null);
     },
     openGallery: () => {
       actions.setCardOpen(false);
       actions.setSummaryOpen(false);
       actions.setGalleryOpen(true);
     },
-    closeGallery: () => {
-      actions.setGalleryOpen(false);
-      actions.setMeterOpen(true);
-    },
+    /** 只关画廊（点遮罩用）；顶部按钮走 backToMeter。 */
+    closeGallery: () => actions.setGalleryOpen(false),
     openSummary: () => {
       actions.setCardOpen(false);
       actions.setGalleryOpen(false);
       actions.setSummaryOpen(true);
     },
-    closeSummary: () => {
-      actions.setSummaryOpen(false);
-      actions.setMeterOpen(true);
-    },
+    closeSummary: () => actions.setSummaryOpen(false),
 
     /**
      * 从画廊「回看」某条收藏：关掉画廊，带焦点打开记录卡。

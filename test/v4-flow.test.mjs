@@ -825,22 +825,57 @@ test('打开汇总或画廊时收拢态同样让位', () => {
   }
 });
 
-test('收起面板后回到展开态计时器（不塌回收拢态）', () => {
+test('「返回」把面板换成展开态计时器（不塌回收拢态）', () => {
   const env = bootedWithData();
   const handlers = buildHandlers(env);
 
   handlers.openSummary();
   assert.equal(env.instance.getSnapshot().ui.summaryOpen, true);
 
-  handlers.closeSummary();
+  // v9 起面板的唯一退出路径是 backToMeter（顶部的「返回」按钮 / 点空白）。
+  handlers.backToMeter();
   const ui = env.instance.getSnapshot().ui;
   assert.equal(ui.summaryOpen, false);
   assert.equal(ui.meterOpen, true, '应回到展开态，用户刚看完注意力还在这一块');
 
-  // 收起后应当看到的是展开面板而不是收拢小球。
   const tree = render(env);
   assert.equal(findByClass(tree, 'ig-hud'), null, '收拢态不该出现');
   assert.ok(findByClass(tree, 'ig-hud-panel') !== null, '应回到展开态');
+});
+
+test('「返回」同时清掉聚焦记录（下次打开记录卡不是回看语境）', () => {
+  const env = bootedWithData();
+  const handlers = buildHandlers(env);
+  env.actions.setFocusedRecord('r1');
+  handlers.backToMeter();
+  assert.equal(env.instance.getSnapshot().ui.focusedRecordId, null);
+});
+
+test('「返回」能从任意面板退出（三个都通）', () => {
+  for (const open of ['openSummary', 'openGallery', 'openCard']) {
+    const env = bootedWithData();
+    const handlers = buildHandlers(env);
+    handlers[open]();
+    handlers.backToMeter();
+    const ui = env.instance.getSnapshot().ui;
+    assert.equal(ui.cardOpen, false, `${open} 后返回，记录卡应关`);
+    assert.equal(ui.galleryOpen, false, `${open} 后返回，画廊应关`);
+    assert.equal(ui.summaryOpen, false, `${open} 后返回，汇总应关`);
+    assert.equal(ui.meterOpen, true, `${open} 后返回应回到展开态计时器`);
+  }
+});
+
+test('三个面板的退出按钮都是「返回」（带箭头），不再是 ×', () => {
+  const env = bootedWithData();
+  for (const flag of ['setCardOpen', 'setGalleryOpen', 'setSummaryOpen']) {
+    const e = bootedWithData();
+    e.actions[flag](true);
+    const tree = render(e);
+    const back = findByClass(tree, 'ig-panel-back');
+    assert.ok(back !== null, `${flag} 面板应有「返回」按钮`);
+    assert.ok(findByClass(back, 'ig-back-icon') !== null, '「返回」应带一个向左的尖括号');
+  }
+  void env;
 });
 
 /** 渲染图层并返回元素树。 */
