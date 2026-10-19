@@ -70,31 +70,14 @@ function fakeTree(spec) {
   return {
     root: {
       querySelectorAll: () => flat.map(make),
-      // 默认没有宿主锚点，走几何兜底路径。
-      querySelector: () => null,
     },
     doc: { defaultView: { innerWidth: vw, innerHeight: vh } },
   };
 }
 
 /**
- * 造一个带宿主锚点的树：`[data-shell-overlay]` 的顶边就是外壳让开的位置。
- * 这是首选举据 —— 宿主自己声明的契约，不依赖类名或几何猜测。
- */
-function fakeTreeWithAnchor(anchorTop, vw = 1200, vh = 800) {
-  const anchor = {
-    childElementCount: 1,
-    getBoundingClientRect: () => ({ top: anchorTop, bottom: vh, width: vw, height: vh - anchorTop }),
-  };
-  return {
-    root: {
-      querySelector: (selector) => (selector === '[data-shell-overlay]' ? anchor : null),
-      querySelectorAll: () => [],
-    },
-    doc: { defaultView: { innerWidth: vw, innerHeight: vh } },
-  };
-}
 
+/**
 test('量出通栏外壳的底边', () => {
   const { root, doc } = fakeTree({
     nodes: [
@@ -242,84 +225,117 @@ test('dispose 可重复调用不抛', () => {
   dispose();
   assert.doesNotThrow(() => dispose());
 });
-// ── 首选举据：宿主标记的 data-shell-overlay ──────────────────────────
-
-test('首选 data-shell-overlay 的顶边（宿主自己声明的边界）', () => {
-  const { root, doc } = fakeTreeWithAnchor(56);
-  assert.equal(measureSafeTop(root, doc), 56 + OFFSET_AFTER_EDGE);
-});
-
-test('锚点优先于几何：即使几何给出更小的值也以锚点为准', () => {
-  const { root, doc } = fakeTreeWithAnchor(56);
-  // 塞一个顶边更小的几何候选，锚点仍应胜出。
-  root.querySelectorAll = () => [
-    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 20, width: 1200, height: 20 }) },
-  ];
-  assert.equal(measureSafeTop(root, doc), 56 + OFFSET_AFTER_EDGE, '锚点是宿主契约，优先');
-});
-
-test('锚点被推到异常位置时退回几何（不盲信）', () => {
-  // 锚点在视口很下方（比如全屏模式被布局挪走）—— 这时的值是错的，
-  // 宁可走几何兜底也不要照抄。
-  const { root, doc } = fakeTreeWithAnchor(600);
-  root.querySelectorAll = () => [
-    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 50, width: 1200, height: 50 }) },
-  ];
-  assert.equal(
-    measureSafeTop(root, doc),
-    50 + OFFSET_AFTER_EDGE,
-    '锚点位置异常时走几何',
-  );
-});
-
-test('锚点负坐标（滚出视口）时退回几何', () => {
-  const { root, doc } = fakeTreeWithAnchor(-10);
-  root.querySelectorAll = () => [
-    { childElementCount: 3, getBoundingClientRect: () => ({ top: 0, bottom: 48, width: 1200, height: 48 }) },
-  ];
-  assert.equal(measureSafeTop(root, doc), 48 + OFFSET_AFTER_EDGE);
-});
-
-test('根上没有 querySelector 时安全退回几何路径', () => {
-  const { root, doc } = fakeTree({
-    nodes: [{ top: 0, height: 52, width: 1200, children: 5 }],
-  });
-  delete root.querySelector;
-  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE);
-});
-
-test('querySelector 抛错时不崩（退回几何）', () => {
-  const { root, doc } = fakeTree({
-    nodes: [{ top: 0, height: 52, width: 1200, children: 5 }],
-  });
-  root.querySelector = () => {
-    throw new Error('boom');
-  };
-  // 真实宿主里这不会发生，但测量失败不该把插件打崩 —— 它只是个布局微调。
-  assert.doesNotThrow(() => measureSafeTop(root, doc), '测量失败不该抛');
-});
-
 // ── 方向性回归：偏移越大 = 越靠下 ────────────────────────────────────
 //
 // v8/v9 我连续把偏移调小，以为「数字小 = 下来一点」，实际是「数字小 = 往上」，
 // 用户连三轮反馈「越来越高」。这组测试锁死语义，避免再反。
 
-test('EDGE_GAP 是向下让出的距离：结果 = 外壳底边 + EDGE_GAP', () => {
-  const { root, doc } = fakeTreeWithAnchor(56);
+test('结果 = 头部下沿 + EDGE_GAP（是相加，不是相减）', () => {
+  const { root, doc } = fakeTree({
+    nodes: [{ top: 0, height: 76, width: 1200, children: 5 }],
+  });
   const top = measureSafeTop(root, doc);
-  assert.equal(top, 56 + EDGE_GAP, '必须是相加，不是相减');
-  assert.ok(top > 56, '结果必须在外壳底边之下（视觉上更靠下）');
+  assert.equal(top, 76 + EDGE_GAP, '必须是相加');
+  assert.ok(top > 76, '结果必须在头部下沿之下（视觉上更靠下）');
 });
 
-test('偏移量足以离开导航栏：落点在内容区内部', () => {
-  const { root, doc } = fakeTreeWithAnchor(56);
+test('偏移量足以离开头部：落点在对话区内部', () => {
+  const { root, doc } = fakeTree({
+    nodes: [{ top: 0, height: 76, width: 1200, children: 5 }],
+  });
   const top = measureSafeTop(root, doc);
-  // 至少要让出 20px 才算「在对话框内部」，否则仍像贴着导航栏。
-  assert.ok(top - 56 >= 20, `落点应明显低于导航栏下沿，实际只差 ${top - 56}px`);
+  assert.ok(top - 76 >= 10, `落点应明显低于头部下沿，实际只差 ${top - 76}px`);
+  assert.ok(top - 76 <= 40, `但也不该深到像漂在中间，实际差 ${top - 76}px`);
 });
 
-test('兜底值也落在内容区（不小于外壳 + 一档偏移）', () => {
+test('兜底值也落在内容区（不贴着顶端）', () => {
   const { root, doc } = fakeTree({ nodes: [] });
   const top = measureSafeTop(root, doc);
-  assert.ok(top >= 56 + 10, `兜底值 ${top} 应落在内容区，而不是贴着顶端`);
+  assert.ok(top >= 76, `兜底值 ${top} 应落在内容区，而不是贴着顶端`);
+});
+
+// ── 忠实还原真实 DSH 布局（v10 补上的关键一环）────────────────────────
+//
+// 之前几轮改错，根因是**测试里的假布局和真实布局不一样** —— 假树只有
+// 「一个通栏外壳 + 正文」，而真实布局是：
+//
+//   frame (grid: 1fr auto，没有 header 行)
+//   ├── sidebarCol        左侧会话列表（占掉一部分宽度）
+//   ├── centerCol         会话列
+//   │   └── header        标题 + 右上角按钮，min-height 76px（内容驱动）
+//   │   └── scrollBody    聊天区
+//   ├── bottomRow         [data-shell-bottom]
+//   └── overlayLayer      [data-shell-overlay]，position:absolute; inset:0
+//
+// 注意 overlay 的 top 是 0、高度是满屏 —— 它**不是**顶部边界。这条假布局里
+// 必须体现出来，否则「拿 overlay 当边界」这类错误永远测不出来。
+
+/**
+ * 造一个忠实于真实 DSH 的布局树。
+ *
+ * @param options - { headerHeight, vw, vh, sidebarWidth }
+ * @returns { root, doc }
+ */
+function fakeRealLayout(options = {}) {
+  const vw = options.vw ?? 1400;
+  const vh = options.vh ?? 900;
+  const sidebar = options.sidebarWidth ?? 260;
+  const headerHeight = options.headerHeight ?? 76;
+  const centerWidth = vw - sidebar;
+
+  /** 一个几何节点。 */
+  const node = (spec) => ({
+    childElementCount: spec.children ?? 1,
+    getBoundingClientRect: () => ({
+      top: spec.top,
+      bottom: spec.top + spec.height,
+      width: spec.width,
+      height: spec.height,
+    }),
+  });
+
+  const header = node({ top: 0, height: headerHeight, width: centerWidth, children: 3 });
+  const titleRow = node({ top: 10, height: 30, width: centerWidth - 48, children: 2 });
+  const centerCol = node({ top: 0, height: vh, width: centerWidth, children: 2 });
+  const scrollBody = node({ top: headerHeight, height: vh - headerHeight, width: centerWidth, children: 9 });
+  const sidebarCol = node({ top: 0, height: vh, width: sidebar, children: 5 });
+  // ⚠ overlay 满窗口：top 0、高度满屏。它必须被高度上限排除掉。
+  const overlay = node({ top: 0, height: vh, width: vw, children: 1 });
+  const frame = node({ top: 0, height: vh, width: vw, children: 4 });
+
+  return {
+    root: { querySelectorAll: () => [frame, sidebarCol, centerCol, header, titleRow, scrollBody, overlay] },
+    doc: { defaultView: { innerWidth: vw, innerHeight: vh } },
+  };
+}
+
+test('真实布局：量出会话头部的下沿（76px 那次）', () => {
+  const { root, doc } = fakeRealLayout({ headerHeight: 76 });
+  assert.equal(measureSafeTop(root, doc), 76 + EDGE_GAP);
+});
+
+test('真实布局：头部矮一些时（无标签页约 50px）结果跟着变', () => {
+  const { root, doc } = fakeRealLayout({ headerHeight: 50 });
+  assert.equal(measureSafeTop(root, doc), 50 + EDGE_GAP, '测量必须跟着头部高度走');
+});
+
+test('真实布局：满窗口的 overlay 层不被误当成顶部边界', () => {
+  // overlay 的 top 是 0、高度满屏。如果实现里拿它当边界，结果会退化成
+  // 0 + EDGE_GAP = 14 —— 比头部（76）还高，正是这轮的真实 bug。
+  const { root, doc } = fakeRealLayout({ headerHeight: 76 });
+  const top = measureSafeTop(root, doc);
+  assert.ok(top > 76, `结果 ${top} 必须在头部下沿之下，而不是被 overlay 拉回顶端`);
+  assert.notEqual(top, EDGE_GAP, '不能被 overlay 的 top=0 带偏');
+});
+
+test('真实布局：结果明显落在对话区内部而不是贴着头部', () => {
+  const { root, doc } = fakeRealLayout({ headerHeight: 76 });
+  const top = measureSafeTop(root, doc);
+  assert.ok(top - 76 >= 12, `距头部下沿只有 ${top - 76}px，仍像贴着头部`);
+  assert.ok(top - 76 <= 40, `距头部下沿 ${top - 76}px，已经太深了`);
+});
+
+test('真实布局：窄窗口（侧边栏占掉大半）仍能量到', () => {
+  const { root, doc } = fakeRealLayout({ vw: 900, sidebarWidth: 320, headerHeight: 76 });
+  assert.equal(measureSafeTop(root, doc), 76 + EDGE_GAP);
 });
