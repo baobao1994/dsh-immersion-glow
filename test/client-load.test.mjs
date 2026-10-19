@@ -282,7 +282,10 @@ test('apply 通过 provideRoot 暴露 useImmersionGlow 与 actions', () => {
   const { ctx, record } = makeFakeCtx();
   exported.apply(ctx);
 
-  assert.equal(record.provideRootCalls.length, 1, '只应贡献一次 root 面');
+  // v7 起是**两次**：第一次带 hook + actions（apply 早期），第二次补上 handlers
+  // —— 它依赖在第一次之后才构造出来的闭包。两次都是合法的增量贡献，
+  // 渲染器会把 root 的 props 合并，所以对组件是透明的。
+  assert.ok(record.provideRootCalls.length >= 1, '至少要贡献一次 root 面');
   const contribution = record.provideRootCalls[0];
   assert.ok(contribution.hooks !== undefined, '必须提供 hooks');
   assert.ok(contribution.hooks.immersionGlow !== undefined, 'hook 源名必须是 immersionGlow');

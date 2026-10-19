@@ -39,6 +39,12 @@ function loadModule() {
 const { measureSafeTop, installSafeTop, FALLBACK_TOP } = loadModule();
 
 /**
+ * 期望偏移 = 外壳底边 + 间距(12) + 内容区内缩(16)。
+ * 两段偏移的分工见 src/client/safe-top.js 的常量注释。
+ */
+const OFFSET_AFTER_EDGE = 12 + 16;
+
+/**
  * 造一个假的元素树。
  *
  * @param spec - { nodes: [{ top, height, width, children }], vw, vh }
@@ -74,7 +80,7 @@ test('量出最上方的通栏外壳', () => {
       { top: 52, height: 700, width: 900, children: 20 }, // 正文
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 52 + 12, '外壳底边 + 12px');
+  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE, '外壳底边 + 间距 + 内容区内缩');
 });
 
 test('多个通栏候选时取最靠上的那个', () => {
@@ -84,7 +90,7 @@ test('多个通栏候选时取最靠上的那个', () => {
       { top: 30, height: 40, width: 1100, children: 3 },
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 30 + 12, '取最小的底边');
+  assert.equal(measureSafeTop(root, doc), 30 + OFFSET_AFTER_EDGE, '取最小的底边');
 });
 
 test('窄容器（按钮条之类）不算外壳', () => {
@@ -94,7 +100,7 @@ test('窄容器（按钮条之类）不算外壳', () => {
       { top: 0, height: 52, width: 1200, children: 5 },
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 52 + 12);
+  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE);
 });
 
 test('不贴着顶端的不算外壳', () => {
@@ -112,7 +118,7 @@ test('叶子节点（按钮/图标）不算外壳', () => {
       { top: 0, height: 52, width: 1200, children: 5 },
     ],
   });
-  assert.equal(measureSafeTop(root, doc), 52 + 12);
+  assert.equal(measureSafeTop(root, doc), 52 + OFFSET_AFTER_EDGE);
 });
 
 test('超过半屏高的容器不算外壳（那是正文）', () => {
@@ -192,7 +198,7 @@ test('installSafeTop 把测量结果写进 --ig-safe-top', () => {
   const dispose = installSafeTop(doc);
   assert.ok(writes.length > 0, '应至少写一次');
   assert.equal(writes[0][0], '--ig-safe-top');
-  assert.equal(writes[0][1], '68px', '56 + 12');
+  assert.equal(writes[0][1], `${56 + OFFSET_AFTER_EDGE}px`, '底边 + 两段偏移');
   dispose();
 });
 

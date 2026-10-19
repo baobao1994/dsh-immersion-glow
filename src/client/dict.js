@@ -38,6 +38,7 @@ const ZH = {
   'hud.steps': '{n} 步',
   'hud.empty': '还没有模型记录。发起一次询问后这里才会有数据。',
   'hud.verdictLabel': '你评过：',
+  'hud.restIn': '下次提醒还有 {duration}',
   // 提醒现在是计时器的一种状态，文案因此是「一句话」而不是一张卡片的标题+正文。
   'hud.alert.body': '该歇一下了',
   'hud.alert.unread': '有提醒未看',
@@ -172,6 +173,7 @@ const EN = {
   'hud.steps': '{n} steps',
   'hud.empty': 'No model data yet. It appears once you send a request.',
   'hud.verdictLabel': 'You rated it:',
+  'hud.restIn': 'next reminder in {duration}',
   'hud.alert.body': 'Time to step away',
   'hud.alert.unread': 'Unread reminder',
   'hud.alert.seconds': 'hides in {n}s',

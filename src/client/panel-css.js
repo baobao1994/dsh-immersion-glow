@@ -7,6 +7,13 @@
  */
 
 const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────────────────────────────────────── */
+/*
+ * 遮罩：只做「点空白关闭」，不改变颜色。
+ *
+ * 之前记录卡在底部居中时它需要压暗一点来建立层次；现在面板贴着内容区右上角，
+ * 压暗整个窗口反而像弹出了模态对话框 —— 而它其实是个侧面板。所以保持透明，
+ * 只承担点击关闭的职责。
+ */
 .ig-scrim {
   position: absolute;
   inset: 0;
@@ -14,13 +21,20 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   background: transparent;
 }
 
+/*
+ * 记录卡 / 画廊 / 汇总 / 计时器明细**共用右上角这一个位置**。
+ *
+ * 之前记录卡在底部居中、计时器在右上角，同时开就是两个不相干的浮层飘在
+ * 屏幕两端 —— 看着乱，视线要在两个地方来回跳。现在统一到一处，配合
+ * ig-panel--push 的推进转场，「上一层 → 下一层」是连续的动作而不是
+ * 突然多出一个东西。
+ */
 .ig-panel {
   position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: var(--ig-safe-top, 64px);
+  right: 16px;
   pointer-events: auto;
-  width: min(420px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
   max-height: min(70vh, 560px);
   overflow: auto;
   display: flex;
@@ -34,21 +48,28 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   backdrop-filter: blur(18px) saturate(1.4);
   color: var(--dsw-alias-label-primary, currentColor);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-  animation: ig-panel-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: ig-panel-push 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 推进转场：从上一层的位置向左让 8px 并淡入。
+ *
+ * 位移很小（8px）且只动 transform —— 这是同一锚点上的「换页」，不是
+ * 飞入。若给大幅度，边缘的框会突然跳一下，反而更像两个东西。
+ */
+@keyframes ig-panel-push {
+  from { opacity: 0; transform: translateX(-8px) scale(0.985); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
 }
 
 .ig-panel--closing {
   animation: ig-panel-out 0.45s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
-@keyframes ig-panel-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(12px) scale(0.97); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
-}
-
+/* 收起：向右让 8px 并淡出，与推进方向相反 —— 形成「推进 → 推出」的一对。 */
 @keyframes ig-panel-out {
-  from { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
-  to   { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.98); }
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(-8px) scale(0.985); }
 }
 
 .ig-panel-head {
@@ -405,29 +426,61 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   color: var(--dsw-alias-label-warning, #d9a441);
 }
 
-/* 收拢态圆环右侧的两行字：模型名（可省略）+ 精确耗时。 */
+/*
+ * 收拢态的两行文字。
+ *
+ * 分工是刻意的（用户反馈 v6 指出了原先左右含义混乱）：
+ *   第一行 = 「现在是什么」 + 「一共多久」   ← 主信息，最易读
+ *   第二行 = 一句解释「这个数是什么」或「还有多久收起」 ← 副信息，降一级
+ *
+ * 第二行不是装饰：中心圆里那个「4」没有单位，不解释就是天书。
+ */
 .ig-hud-side {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 1px;
   align-items: flex-start;
   min-width: 0;
-  max-width: 132px;
+  max-width: 168px;
 }
 
-.ig-hud-model {
+.ig-hud-row-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ig-hud-sub-line {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 15px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+  font-variant-numeric: tabular-nums;
+}
+
+.ig-hud-sub-line--alert {
+  color: var(--dsw-alias-label-warning, #d9a441);
+}
+
+.ig-hud-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
 }
 
 .ig-hud-time {
-  font-size: 13px;
-  line-height: 17px;
+  flex: none;
+  font-size: 12.5px;
+  line-height: 16px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-primary, currentColor);
@@ -762,7 +815,7 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 
 /* 汇总面板比记录卡宽：它要并排放三格客观指标，窄了会挤成一团。 */
 .ig-panel--wide {
-  width: min(520px, calc(100vw - 32px));
+  width: min(400px, calc(100vw - 32px));
 }
 
 .ig-block {

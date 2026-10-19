@@ -326,16 +326,28 @@ function apply(ctx) {
 
   // ── 共用处理函数（供各组件 props 传递） ────────────────────────────
   const handlers = {
+    // 三个面板（计时器明细 / 记录卡 / 汇总）**互斥**：同一时刻只开一个，
+    // 否则两个模态叠在一起，既看不清也点不准（用户反馈 v6）。
     openCard: () => {
       actions.countOpen();
       // 手动打开 = 看「当前这次」，所以清掉可能残留的聚焦。
       actions.setFocusedRecord(null);
+      actions.setGalleryOpen(false);
+      actions.setSummaryOpen(false);
       actions.setCardOpen(true);
     },
     closeCard: () => actions.setCardOpen(false),
-    openGallery: () => actions.setGalleryOpen(true),
+    openGallery: () => {
+      actions.setCardOpen(false);
+      actions.setSummaryOpen(false);
+      actions.setGalleryOpen(true);
+    },
     closeGallery: () => actions.setGalleryOpen(false),
-    openSummary: () => actions.setSummaryOpen(true),
+    openSummary: () => {
+      actions.setCardOpen(false);
+      actions.setGalleryOpen(false);
+      actions.setSummaryOpen(true);
+    },
     closeSummary: () => actions.setSummaryOpen(false),
 
     /**
@@ -346,7 +358,6 @@ function apply(ctx) {
     reviewRecord: (id) => {
       actions.countOpen();
       actions.setGalleryOpen(false);
-      actions.setCardOpen(false);
       actions.setSummaryOpen(false);
       actions.setFocusedRecord(id);
       actions.setCardOpen(true);
@@ -408,6 +419,14 @@ function apply(ctx) {
   };
 
   // ── 三处插槽 ─────────────────────────────────────────────────────
+  // handlers 也经 root 面暴露出去。
+  //
+  // 为什么不只留在闭包里：三个面板「互斥」这条规则（打开记录卡要关掉汇总与
+  // 画廊）正是 handler 里实现的，而它是**只有测得到才守得住**的不变量 ——
+  // 单元测试过去复制了一份 handler 逻辑，等于在测复制品。暴露之后测试驱动的是
+  // 真代码。组件侧也省得层层透传。
+  ctx.slots.provideRoot({ props: { igHandlers: handlers } });
+
   registerSlots({ ctx, React, actions, translator, handlers });
 }
 

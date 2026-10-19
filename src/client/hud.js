@@ -230,20 +230,36 @@ function CornerMeter(props) {
       h(
         'span',
         { class: 'ig-hud-side' },
-        // 提醒态把模型名换成提示语：这一刻用户该知道的是「该歇了」，
-        // 不是「你在用 claude-opus」。耗时仍然留着 —— 它是背景信息。
+
+        // ── 第一行：主体 ────────────────────────────────────────────
+        // 常态 = 模型名；提醒态 = 提示语（此刻该知道的是「该歇了」，而不是
+        // 「你在用 claude-opus」）。总耗时恒在右端 —— 它是背景信息，任何时候
+        // 都不该被提醒语挤掉。
+        h(
+          'span',
+          { class: 'ig-hud-row-line' },
+          h(
+            'span',
+            { class: alert === null ? 'ig-hud-model' : 'ig-hud-model ig-hud-model--alert' },
+            alert === null
+              ? modelName
+              : t(alert.mode === 'unread' ? 'hud.alert.unread' : 'hud.alert.body'),
+          ),
+          alert !== null && alert.mode === 'unread'
+            ? h('span', { class: 'ig-hud-dot', 'aria-hidden': 'true' })
+            : null,
+          h('span', { class: 'ig-hud-time' }, formatElapsed(modelMs, t)),
+        ),
+
+        // ── 第二行：副行，只在需要解释第一行时才出现 ─────────────────
+        // 常态：说清这个数是什么（「模型耗时 4 分钟」），因为中心那个「4」在
+        // 44px 的圆里是个没有单位的数，不解释它就是天书。
+        // 提醒态：换成「还有多久收起」——这是提醒态下唯一需要额���说明的事。
         alert === null
-          ? h('span', { class: 'ig-hud-model' }, modelName)
-          : h(
-              'span',
-              { class: 'ig-hud-model ig-hud-model--alert' },
-              alert.mode === 'unread' ? t('hud.alert.unread') : t('hud.alert.body'),
-            ),
-        h('span', { class: 'ig-hud-time' }, formatElapsed(modelMs, t)),
-        alert !== null && alert.mode === 'countdown'
-          ? h('span', { class: 'ig-hud-countdown' }, t('hud.alert.seconds', { n: alert.secondsLeft }))
-          : null,
-        alert !== null && alert.mode === 'unread' ? h('span', { class: 'ig-hud-dot', 'aria-hidden': 'true' }) : null,
+          ? h('span', { class: 'ig-hud-sub-line' }, t('hud.modelTime'), ' · ', progressLabel(t, activeMs, snapshot.settings.thresholdsMin))
+          : alert.mode === 'countdown'
+            ? h('span', { class: 'ig-hud-sub-line ig-hud-sub-line--alert' }, t('hud.alert.seconds', { n: alert.secondsLeft }))
+            : null,
       ),
     );
   }
@@ -379,6 +395,24 @@ function CornerMeter(props) {
       ),
     ),
   );
+}
+
+/**
+ * 生成副行里的「距下次提醒还有多久」。
+ *
+ * 常驻提示形态（「还有 12 分钟」）比倒计时形态（「12s 后收起」）适合常态：
+ * 前者说的是用户在意的未来时间点，后者说的是一个即将消失的 UI 元素。
+ *
+ * @param t - 翻译函数。
+ * @param activeMs - 当前净活跃毫秒。
+ * @param thresholdsMin - 阈值数组。
+ * @returns 文案。
+ */
+function progressLabel(t, activeMs, thresholdsMin) {
+  const progress = ringProgress({ elapsedMs: activeMs, thresholdsMin, modelMs: 0 });
+  const remainingMs = Math.max(0, progress.nextAtMs - (Number.isFinite(activeMs) ? activeMs : 0));
+  if (progress.nextAtMs <= 0) return '';
+  return t('hud.restIn', { duration: formatElapsed(remainingMs, t) });
 }
 
 /**

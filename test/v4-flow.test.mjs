@@ -157,6 +157,7 @@ function boot(snapshots = {}) {
   const { ctx, record } = makeFakeCtx();
   exported.apply(ctx);
 
+  const provideRootCalls = record.provideRootCalls;
   const contribution = record.provideRootCalls[0];
   const instance = contribution.hooks.immersionGlow;
   const actions = contribution.props.immersionGlowActions;
@@ -185,7 +186,7 @@ function boot(snapshots = {}) {
     return element;
   };
 
-  return { instance, actions, selectorHook, probe, layer, runProbe, contribution };
+  return { instance, actions, selectorHook, probe, layer, runProbe, contribution, provideRootCalls };
 }
 
 /** 造一份含两条 assistant 调用（分属两个模型）的 chat 快照。 */
@@ -539,7 +540,8 @@ test('提醒让计时器转入警示态，而不是多出一个浮层', () => {
   assert.equal(findByClass(tree, 'ig-reminder-badge'), null, '不应再有未读徽标卡');
   // 取而代之：计时器圆环转成警示态。
   assert.ok(findByClass(tree, 'ig-ring--alert') !== null, '圆环应进入提醒态');
-  assert.ok(findByClass(tree, 'ig-hud-countdown') !== null, '应显示倒计时');
+  // v7 起倒计时在副行（ig-hud-sub-line--alert），不再是独立的一行。
+  assert.ok(findByClass(tree, 'ig-hud-sub-line--alert') !== null, '副行应显示倒计时');
 });
 
 test('提醒态下点击计时器：清未读 + 展开明细', () => {
@@ -670,3 +672,89 @@ test('详情面板里的三格指标都渲染出数值', () => {
   assert.ok(figures !== null);
   assert.ok(findByClass(figures, 'ig-hud-figure') !== null);
 });
+
+// ── v7：面板互斥 + 布局分工 ──────────────────────────────────────────
+
+test('面板互斥：打开记录卡会关掉汇总与画廊', () => {
+  const env = bootedWithData();
+  env.actions.setGalleryOpen(true);
+  env.actions.setSummaryOpen(true);
+
+  // 走真实 handler：settings 行与卡片按钮都用它。
+  const handlers = buildHandlers(env);
+  handlers.openCard();
+
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.cardOpen, true);
+  assert.equal(ui.galleryOpen, false, '两个浮层同时开会看不清也点不准');
+  assert.equal(ui.summaryOpen, false);
+});
+
+test('面板互斥：从计时器开汇总，不会同时留着记录卡', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  buildHandlers(env).openSummary();
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.summaryOpen, true);
+  assert.equal(ui.cardOpen, false, '记录卡与汇总不应叠在一起');
+});
+
+test('面板互斥：打开画廊也会关掉记录卡与汇总', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  env.actions.setSummaryOpen(true);
+  buildHandlers(env).openGallery();
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.galleryOpen, true);
+  assert.equal(ui.cardOpen, false);
+  assert.equal(ui.summaryOpen, false);
+});
+
+test('收拢态两行分工：第一行是主体+总耗时，第二行解释那个数', () => {
+  const env = bootedWithData();
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const hud = findByClass(tree, 'ig-hud');
+  const line = findByClass(hud, 'ig-hud-row-line');
+  const sub = findByClass(hud, 'ig-hud-sub-line');
+  assert.ok(line !== null, '应有两行结构里的第一行');
+  assert.ok(sub !== null, '应有两行结构里的第二行');
+  // 第二行必须解释中心那个没有单位的数字。
+  assert.ok(collectText(sub).includes('模型耗时'), '副行应说明这个数是什么');
+});
+
+test('提醒态下副行换成倒计时（第一行仍是总耗时）', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const hud = findByClass(tree, 'ig-hud');
+  const sub = findByClass(hud, 'ig-hud-sub-line--alert');
+  assert.ok(sub !== null, '副行应切成倒计时');
+  const text = collectText(sub);
+  assert.ok(text.includes('60s') || text.includes('后收起'), `副行应显示倒计时，实际 ${text}`);
+  // 总耗时仍在第一行右端，不该被提醒挤掉。
+  assert.ok(findByClass(hud, 'ig-hud-time') !== null, '总耗时始终保留');
+});
+
+/**
+ * 从 bundle 里取出 handlers —— 复刻 index.js 装配出来的形状。
+ * 直接调 actions 测不到「打开 X 会关掉 Y」这种联动，那正是本组测试的目标。
+ */
+function buildHandlers(env) {
+  // 取 index.js 真实装配出来的 handlers —— 不在测试里复制一份逻辑。
+  // 复制等于在测复制品：改坏了真代码，测试照样绿。
+  const calls = env.provideRootCalls;
+  for (const call of calls) {
+    if (call.props !== undefined && call.props.igHandlers !== undefined) return call.props.igHandlers;
+  }
+  throw new Error('apply() 没有把 handlers 暴露到 root 面（index.js 的 provideRoot）');
+}
