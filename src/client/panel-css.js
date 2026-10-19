@@ -357,13 +357,14 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   background: var(--dsw-alias-text-brand, #539cfa);
 }
 
-/* ── 右上角常驻读数（v4）────────────────────────────────────────── */
+/* ── 右上角圆形计时器（v5）──────────────────────────────────────── */
 /*
- * 收拢态刻意只有「模型名 · 耗时」两个信息量。它必须是环境的一部分而不是一个
- * 仪表盘：多放一个数字，它就从背景变成干扰。
+ * 收拢态是一个 44px 的圆环 + 一行字。圆环表示「离下一次该歇了还有多远」，
+ * 中心数字表示「模型已经跑了多久」，右侧是当前模型名。
  *
- * 层级：底板 blur(18px) + 一道极细描边。与提醒卡共用同一套材质语言，但弱一档
- * —— 提醒是事件（该停下），读数是常态（一直在）。
+ * 三个信息量是上限。再多它就从环境的一部分变成一个仪表盘，而它该是前者。
+ *
+ * 材质与提醒卡同源（blur + 一道极细描边）但弱一档：提醒是事件，读数是常态。
  */
 .ig-hud {
   position: absolute;
@@ -372,8 +373,8 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 10px 5px 8px;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
   border-radius: var(--dsw-radius-full, 999px);
   border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.24));
   background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.1));
@@ -404,27 +405,75 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 }
 
 /*
- * 小圆点：不随时间变化地亮着，像一个「正在计」的指示灯。用 tertiary 而不是
- * brand 色 —— brand 是提醒的语义，读数不该占用它。
+ * 圆环本体。
+ *
+ * 中心数字用 HTML 而非 SVG <text>：SVG 文本的字号与基线在各 WebView 上表现
+ * 不一、垂直居中尤其难控，绝对定位的 span 更稳。数字与环同色系但更深一档，
+ * 靠 font-variant-numeric 的等宽数字避免每秒跳动导致宽度抖动。
  */
-.ig-hud-dot {
-  inline-size: 5px;
-  block-size: 5px;
-  border-radius: 50%;
+.ig-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  inline-size: 44px;
+  block-size: 44px;
   flex: none;
-  background: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
+.ig-ring-svg {
+  display: block;
+  transform: rotate(0deg);
+}
+
+.ig-ring-track {
+  stroke: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.18));
+}
+
+.ig-ring-value {
+  stroke: var(--dsw-alias-text-brand, #539cfa);
+  /* 进度只靠 dasharray 变化，不动 transition —— 每秒一跳的动画会一直重绘。 */
+}
+
+.ig-ring-text {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary, currentColor);
+  letter-spacing: -0.2px;
+  user-select: none;
+}
+
+/* 收拢态圆环右侧的两行字：模型名（可省略）+ 精确耗时。 */
+.ig-hud-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 132px;
 }
 
 .ig-hud-model {
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
 }
 
 .ig-hud-time {
-  color: var(--dsw-alias-label-primary, currentColor);
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary, currentColor);
 }
 
 /* 展开态：从收拢的那个圆点长出来，视觉上是同一个东西打开了。 */
@@ -457,9 +506,28 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 
 .ig-hud-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+}
+
+/* 展开态标题升级成任务名：它是最能认出「这次是哪件事」的信息。 */
+.ig-hud-head-text .ig-hud-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary, currentColor);
+}
+
+/* 已答过「达到了吗」时的一行回显，让用户不必再开卡片确认自己评过什么。 */
+.ig-hud-verdict {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: var(--dsw-alias-bg-module-platform, rgba(128, 128, 128, 0.08));
 }
 
 .ig-hud-head-text {
@@ -951,6 +1019,42 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 .ig-verdict-dot--no {
   color: var(--dsw-alias-label-error, #d64545);
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+/* ── 历史累计（v5）───────────────────────────────────────────────── */
+/*
+ * 与逐模型明细视觉上刻意不同：历史是「背景信息」，本次才是主角。所以它用
+ * 更轻的底色（透明 + 一道细边），而本次明细用实心底板。两者放在一起时
+ * 眼睛会先落在本次上 —— 顺序与权重一致。
+ */
+.ig-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ig-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--dsw-radius-md, 10px);
+  border: 0.5px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.16));
+  min-width: 0;
+}
+
+/* 「本次」标记：说明这个模型正在这次任务里被用，别和历史条目混淆。 */
+.ig-history-now {
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: var(--dsw-radius-full, 999px);
+  color: var(--dsw-alias-text-brand, #539cfa);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+  flex: none;
 }
 
 /* ── 汇总面板 ─────────────────────────────────────────────────────── */

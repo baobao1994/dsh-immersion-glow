@@ -152,9 +152,9 @@ function Summary(props) {
       h(
         'div',
         { class: 'ig-summary-figures' },
-        figure(t('summary.ttft'), entry.avgTtftMs === null ? '—' : formatCompactMs(entry.avgTtftMs, t)),
-        figure(t('summary.speed'), entry.avgDecodeTps === null ? '—' : formatTps(entry.avgDecodeTps, t)),
-        figure(t('summary.turns'), String(entry.turns)),
+        figure(React, t('summary.ttft'), entry.avgTtftMs === null ? '—' : formatCompactMs(entry.avgTtftMs, t)),
+        figure(React, t('summary.speed'), entry.avgDecodeTps === null ? '—' : formatTps(entry.avgDecodeTps, t)),
+        figure(React, t('summary.turns'), String(entry.turns)),
       ),
 
       // 占比条：一眼看出这个模型吃掉了你多少时间。

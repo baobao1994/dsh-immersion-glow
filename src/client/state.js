@@ -168,6 +168,8 @@ function createInitialState(now) {
       galleryOpen: false,
       /** 汇总面板（模型实用性总览）。 */
       summaryOpen: false,
+      /** 右上角圆形计时器是否展开明细。 */
+      meterOpen: false,
       /**
        * 记录卡当前聚焦的收藏 id。
        *
@@ -232,6 +234,17 @@ function createActions() {
       draft.ui.summaryOpen = open === true;
     },
 
+    /**
+     * 展开/收起右上角圆形计时器的详情。
+     *
+     * 为什么展开态要进 store 而不是组件本地：提醒卡的「点击看详情」要能把它
+     * 展开，而提醒卡与计时器是两个组件。用组件本地 state 的话，提醒卡要么拿不到
+     * 计时器实例，要么得靠一层事件总线 —— 都是把简单事情复杂化。
+     */
+    setMeterOpen(draft, open) {
+      draft.ui.meterOpen = open === true;
+    },
+
     /** 打开记录卡时可指定聚焦哪条收藏（画廊里点「回看」进来时用）。 */
     setFocusedRecord(draft, id) {
       draft.ui.focusedRecordId = typeof id === 'string' && id.length > 0 ? id : null;
@@ -269,10 +282,24 @@ function createActions() {
     },
 
     /**
+     * 用户点开了提醒（徽标或仍在倒计时的卡片）：清掉未读并展开右上角计时器。
+     *
+     * v5 改语义：此前是「打开记录卡」，但提醒卡本就在计时器旁边，而计时器已经
+     * 装着全部明细 —— 多弹一张卡只是让人多点一次关掉。计时器展开后如果用户还
+     * 想要评价与收藏，展开面板底部就有「打开记录卡」。
+     */
+    openMeter(draft) {
+      draft.ui.reminder = null;
+      draft.ui.cardOpen = false;
+      draft.ui.galleryOpen = false;
+      draft.ui.summaryOpen = false;
+      draft.ui.meterOpen = true;
+    },
+
+    /**
      * 用户点开了提醒（徽标或仍在倒计时的卡片）：清掉它并打开记录卡。
      *
-     * 语义上「点提醒」就是「我要看统计」，所以打开卡片也在这里一并做，
-     * 调用方不用记两件事。
+     * 保留给仍想直接进卡片的入口（比如设置行）。日常路径见 openMeter。
      */
     openFromReminder(draft) {
       draft.ui.reminder = null;
@@ -480,6 +507,7 @@ function createActions() {
         cardOpen: false,
         galleryOpen: false,
         summaryOpen: false,
+        meterOpen: false,
         focusedRecordId: null,
         reminder: null,
       };
@@ -563,6 +591,7 @@ function migrateState(raw, now) {
   // 这三个只在本次页面生命周期内有意义，跨恢复一律回初值（理由同 reminder）。
   merged.ui.reminder = null;
   merged.ui.summaryOpen = false;
+  merged.ui.meterOpen = false;
   merged.ui.focusedRecordId = null;
 
   // ── 分区表：这一步是崩溃的根因，必须保证它一定是对象 ──────────────

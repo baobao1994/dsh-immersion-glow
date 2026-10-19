@@ -84,11 +84,17 @@ function SessionProbe(props) {
   // 从 chat 快照的 assistant 节点推导（每个节点一次模型调用，带 timing）。
   // 为什么不能用宿主投影直接分：sessionStats 只有整会话汇总，不按模型拆；
   // modelSelection 只有 lastUsed/next，没有历史。详见 model-log.js 的文件头。
+  //
+  // ⚠ attribution 是**记忆**：它存放在 useRef 里（页面生命周期内），不进 store。
+  // 没有它，中途换模型后早期节点会被「当前模型」重新归一遍，于是新模型背上旧账。
+  const attribution = React.useRef(null);
   const derived = deriveModelEntries({
     nodes: chatNodesOf(chatSnapshot),
     trajectory: rawTrajectory,
     currentModel,
+    remembered: attribution.current,
   });
+  attribution.current = derived.memory;
   const models = derived.entries;
   const modelsExact = derived.exact;
 

@@ -168,20 +168,38 @@ function buildRouteIndex(trajectory) {
 /**
  * 算出这个会话的逐模型耗时。
  *
+ * ## ⚠ 为什么有 `remembered`
+ *
+ * 归属有两条路：trajectory 的精确记录，以及「当时的当前模型」这个近似。
+ * 问题在于**近似值会随时间变化**：你先用 deepseek-chat 跑了 3 分钟，中途切到
+ * claude-opus。那么此后再做一次全量重算时，`currentModel` 已经是 claude-opus 了 ——
+ * 早先那 3 分钟没有任何轨迹可查，于是会被**重新归到 claude-opus 名下**。
+ * 用户看到的现象就是「一换模型，新模型就背上旧账」，越用越离谱。
+ *
+ * 解法是 `remembered`：调用方（探针，页面生命周期内）把「每个节点当时被判给谁」
+ * 记下来，重算时优先采用。只有**从未判过**的节点才用当次传入的 currentModel。
+ * 这样近似值只在那个节点出现的**那一刻**生效一次，之后就冻结成事实。
+ *
  * @param params - 见下。
  * @param params.nodes - chat 快照的节点数组（由 nodesOf 给出）。
  * @param params.trajectory - trajectory 投影快照，任意形状。
  * @param params.currentModel - modelSelection 归一化后的当前模型（可为 null）。
- * @returns { entries, exact } entries 按 modelMs 降序；exact 表示归属是否来自
- *   trajectory（false = 退回近似，UI 需注明）。
+ * @param params.remembered - { [节点标识]: {key,provider,model} }，上一次的归属结果。
+ *   传 null 等于没有记忆（首次渲染）。
+ * @returns { entries, exact, memory } memory 是本次记下的归属，供下次传入。
  */
 function deriveModelEntries(params) {
   const nodes = Array.isArray(params?.nodes) ? params.nodes : [];
   const fallback = params?.currentModel ?? null;
   const index = buildRouteIndex(params?.trajectory);
+  const remembered = params?.remembered !== null && typeof params?.remembered === 'object' ? params.remembered : {};
   const entries = {};
   /** turn -> 已在该 turn 下数过的模型 key，避免一轮多步时重复计轮次。 */
   const countedTurns = {};
+  /** 本次记下的归属。只增不改 —— 已判定的事实不允许被后来的近似值改写。 */
+  const memory = { ...remembered };
+  /** 有多少条靠 trajectory 精确归属（用于 exact 的诚实判定）。 */
+  let preciseCount = 0;
 
   for (const node of nodes) {
     if (node === null || typeof node !== 'object') continue;
@@ -190,31 +208,38 @@ function deriveModelEntries(params) {
     const ms = modelMsOf(node);
     const time = Number.isFinite(node.time) ? node.time : 0;
     const turn = Number.isFinite(node.turn) ? node.turn : null;
+    const nodeId = nodeIdentity(node);
 
-    // 优先精确归属：trajectory 的 messageId 索引 → seq 索引。
+    // ── 归属三级优先 ────────────────────────────────────────────────
+    // 1) 记忆：之前已经判过，冻结。
+    // 2) 精确：trajectory 的 messageId 索引 → seq 索引。
+    // 3) 近似：当次的 currentModel，仅对该节点生效一次并写入记忆。
+    const memorized = nodeId === null ? null : remembered[nodeId] ?? null;
     let route = null;
-    if (typeof node.messageId === 'string') route = index.byMessage.get(node.messageId) ?? null;
-    if (route === null && Number.isFinite(node.seq)) route = index.bySeq.get(node.seq) ?? null;
+    let exactHit = false;
 
-    // 退回近似：只有当前模型可用时，才能说「这些时间大致花在它身上」。
-    let key;
-    let provider;
-    let model;
-    if (route !== null) {
-      key = route.key;
-      provider = route.provider;
-      model = route.model;
-    } else if (fallback !== null) {
-      key = fallback.key;
-      provider = fallback.provider;
-      model = fallback.model;
+    if (memorized !== null) {
+      route = memorized;
     } else {
+      if (typeof node.messageId === 'string') route = index.byMessage.get(node.messageId) ?? null;
+      if (route === null && Number.isFinite(node.seq)) route = index.bySeq.get(node.seq) ?? null;
+      if (route !== null) exactHit = true;
+      if (route === null && fallback !== null) {
+        route = { key: fallback.key, provider: fallback.provider, model: fallback.model };
+      }
+    }
+
+    if (route === null) {
       // 既没有精确归属也没有当前模型：这条调用不计入任何模型。
       // 凭空归到一个「未知」桶里会污染排行（而且它可能属于别的模型）。
       continue;
     }
+    if (exactHit) preciseCount += 1;
 
-    if (entries[key] === undefined) entries[key] = emptyModelEntry(key, provider, model);
+    const key = route.key;
+    if (nodeId !== null) memory[nodeId] = { key, provider: route.provider, model: route.model };
+
+    if (entries[key] === undefined) entries[key] = emptyModelEntry(key, route.provider, route.model);
     const entry = entries[key];
 
     entry.modelMs += ms;
@@ -234,8 +259,26 @@ function deriveModelEntries(params) {
     .map((key) => entries[key])
     .sort((left, right) => right.modelMs - left.modelMs);
 
-  // exact = 至少有一条调用是靠 trajectory 精确归属的。全靠 fallback 就是近似。
-  return { entries: list, exact: index.available };
+  // exact 只在「每一条都有精确归属」时才为真。混进了近似就是近似 ——
+  // 声称精确而实际有猜测，比明说近似更糟。
+  const covered = list.reduce((sum, entry) => sum + entry.steps, 0);
+  return { entries: list, exact: covered > 0 && preciseCount >= covered, memory };
+}
+
+/**
+ * 给一个 assistant 节点算一个稳定标识，用作归属记忆的键。
+ *
+ * 优先 messageId（跨重渲染稳定），其次 seq（会话内单调递增，也稳定）。
+ * 都没有时返回 null —— 那这条节点只能当次近似，无法记忆。
+ *
+ * @param node - assistant 节点。
+ * @returns 字符串标识或 null。
+ */
+function nodeIdentity(node) {
+  if (node === null || typeof node !== 'object') return null;
+  if (typeof node.messageId === 'string' && node.messageId.length > 0) return `m:${node.messageId}`;
+  if (Number.isFinite(node.seq)) return `s:${node.seq}`;
+  return null;
 }
 
 /**
@@ -348,4 +391,45 @@ function mergeModelEntries(lists) {
   return Object.keys(merged)
     .map((key) => merged[key])
     .sort((left, right) => right.modelMs - left.modelMs);
+}
+/**
+ * 算圆形进度环的「进度」。
+ *
+ * ## 为什么进度不是「已用时长 / 总时长」
+ *
+ * 总时长没有意义 —— 用户不会为了一次任务设一个上限。所以进度锚在**下一档提醒
+ * 阈值**上：「离下一次该歇了还有多远」。这样环满 = 该起身了，跟右上角弹出的
+ * 提醒卡是同一个时刻，不会出现环满了但没提醒的矛盾。
+ *
+ * 阈值用尽时（末档之后按末档步长继续，语义见 timing.nextThresholdMs），
+ * 进度对「下一个虚拟档位」计算。
+ *
+ * @param params - 见下。
+ * @param params.elapsedMs - 本次任务的累计净活跃毫秒（用于旧口径的阈值提醒）。
+ * @param params.thresholdsMin - 用户设置的阈值分钟数组。
+ * @param params.modelMs - 本次任务的模型净耗时毫秒（用于计数环）。
+ * @returns {{ ratio: number, nextAtMs: number, crossed: boolean }}
+ *   ratio ∈ [0,1)；crossed 表示已经越过下一档（环该回到起点重新蓄）。
+ */
+function ringProgress(params) {
+  const elapsed = Number.isFinite(params?.elapsedMs) && params.elapsedMs > 0 ? params.elapsedMs : 0;
+  const list = Array.isArray(params?.thresholdsMin) && params.thresholdsMin.length > 0
+    ? params.thresholdsMin
+    : null;
+  if (list === null) return { ratio: 0, nextAtMs: 0, crossed: false };
+
+  // 本次任务的模型耗时可能远大于活跃时长（模型思考时用户不操作），但阈值提醒
+  // 计的是「你自己的活跃时间」。两者口径不同，这里用活跃时长对阈值，环形读数
+  // 仍然显示模型耗时 —— 环表示「休息进度」，中心数字表示「模型花了多久」。
+  const step = list.length >= 2 ? list[list.length - 1] - list[list.length - 2] : list[0];
+  const span = (Number.isFinite(step) && step > 0 ? step : list[0]) * 60000;
+  if (span <= 0) return { ratio: 0, nextAtMs: 0, crossed: false };
+
+  // 已越过几档（0 基）。
+  let index = 0;
+  while (index < list.length && elapsed >= list[index] * 60000) index += 1;
+  const nextAtMs = nextThresholdMs(list, index);
+  const overshoot = elapsed - (index === 0 ? 0 : list[index - 1] * 60000);
+  const ratio = Math.min(0.999, Math.max(0, overshoot / span));
+  return { ratio, nextAtMs, crossed: index > 0 };
 }

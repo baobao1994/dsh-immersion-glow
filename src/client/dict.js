@@ -37,6 +37,7 @@ const ZH = {
   'hud.turns': '{n} 轮',
   'hud.steps': '{n} 步',
   'hud.empty': '还没有模型记录。发起一次询问后这里才会有数据。',
+  'hud.verdictLabel': '你评过：',
   'hud.openCard': '打开记录卡',
   'hud.openSummary': '看汇总',
 
@@ -59,6 +60,10 @@ const ZH = {
   'card.cancelled': '中断 {duration}',
   'card.models': '各模型',
   'card.models.empty': '没有模型记录。发起一次询问后这里才会有数据。',
+  'card.history': '历史累计',
+  'card.history.now': '本次',
+  'card.history.sessions': '累计 {n} 轮',
+  'card.history.calls': '{n} 次调用',
   'card.note.add': '这次用着怎么样？',
   'card.note.edit': '改一下',
   'card.note.placeholder': '哪里顺手、哪里别扭（可留空）',
@@ -131,8 +136,14 @@ const ZH = {
   'unit.hour': '{n} 小时',
   'unit.hourMinute': '{h} 小时 {m} 分钟',
   'unit.lessThanMinute': '不到 1 分钟',
+  // 耗时的专用精度：「不到 1 分钟」对模型时间没有信息量（57 秒和 3 秒都这样显示），
+  // 所以不足一分钟时直接给秒。
+  'unit.secondShort': '{n} 秒',
+  'unit.minuteShort': '{n} 分',
   'unit.times': '{n} 次',
   'unit.ms': '{n}ms',
+  'ring.seconds': '{n}s',
+  'ring.hours': '{n}h',
   'unit.second': '{n}s',
   'unit.minuteShort': '{n} 分',
 };
@@ -156,6 +167,7 @@ const EN = {
   'hud.turns': '{n} turns',
   'hud.steps': '{n} steps',
   'hud.empty': 'No model data yet. It appears once you send a request.',
+  'hud.verdictLabel': 'You rated it:',
   'hud.openCard': 'Open record',
   'hud.openSummary': 'Summary',
 
@@ -178,6 +190,10 @@ const EN = {
   'card.cancelled': '{duration} interrupted',
   'card.models': 'By model',
   'card.models.empty': 'No model data yet. It appears once you send a request.',
+  'card.history': 'All time',
+  'card.history.now': 'this run',
+  'card.history.sessions': '{n} turns',
+  'card.history.calls': '{n} calls',
   'card.note.add': 'How did it feel?',
   'card.note.edit': 'Edit',
   'card.note.placeholder': 'What worked, what did not (optional)',
@@ -250,8 +266,12 @@ const EN = {
   'unit.hour': '{n} h',
   'unit.hourMinute': '{h} h {m} min',
   'unit.lessThanMinute': 'under 1 min',
+  'unit.secondShort': '{n}s',
+  'unit.minuteShort': '{n}m',
   'unit.times': '{n}',
   'unit.ms': '{n}ms',
+  'ring.seconds': '{n}s',
+  'ring.hours': '{n}h',
   'unit.second': '{n}s',
   'unit.minuteShort': '{n} min',
 };
@@ -313,6 +333,12 @@ function languageOf(snapshot) {
  * @param t - 翻译函数。
  * @returns 例如「1 小时 12 分钟」。
  */
+function formatElapsed(ms, t) {
+  const value = Math.max(0, Number.isFinite(ms) ? ms : 0);
+  if (value < 60000) return t('unit.secondShort', { n: Math.max(1, Math.round(value / 1000)) });
+  return formatDuration(value, t);
+}
+
 function formatDuration(ms, t) {
   const totalMinutes = Math.floor(Math.max(0, ms) / 60000);
   if (totalMinutes < 1) return t('unit.lessThanMinute');

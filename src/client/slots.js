@@ -94,6 +94,9 @@ function registerSlots(params) {
         const sessionsMap = useImmersionGlow((value) => value.sessions);
         const reminder = useImmersionGlow((value) => value.ui.reminder);
         const summaryOpen = useImmersionGlow((value) => value.ui.summaryOpen);
+        // 右上角展开面板要显示「我历来给这个模型评过什么」（v5）。
+        const verdicts = useImmersionGlow((value) => value.verdicts ?? {});
+        const modelNotes = useImmersionGlow((value) => value.modelNotes ?? {});
 
         // 记录卡的时段标签从分区起止时间推导（tagsOf），必须把分区本体传下去。
         // 时长读数也一并算好 —— hud 与 record-card 共用同一口径，避免两处各算一遍
@@ -161,7 +164,8 @@ function registerSlots(params) {
           // 记录卡与汇总互斥：两个都是模态层，同时开会叠在一起。
           h(RecordCard, {
             ...shared,
-            // 焦点钩子：gallery 点「回看」时由 handlers.reviewRecord 打开。
+            // 记录卡的「历史累计」用它算跨会话模型排行。
+            sessions: sessionsMap,
           }),
           h(Gallery, { ...shared, actions: actionsRef }),
           summaryOpen ? h(Summary, shared) : null,
@@ -170,6 +174,8 @@ function registerSlots(params) {
             bucket: hudBucket,
             stats: bucket?.stats ?? null,
             currentModel,
+            verdicts,
+            modelNotes,
           }),
           reminder !== null && reminder !== undefined
             ? h(ReminderCard, {

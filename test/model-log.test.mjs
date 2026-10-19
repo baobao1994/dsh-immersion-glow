@@ -143,7 +143,9 @@ test('既无路由也无当前模型时，这次调用不计入任何模型', ()
   assert.equal(result.entries.length, 0, '凭空归到「未知」桶会污染排行');
 });
 
-test('精确与近似可以共存，exact 仍为 true', () => {
+// ⚠ 此断言在 v4 修「换模型背旧账」时**有意改严**：exact 现在要求每条都有精确
+// 归属，混入任何一条近似就为 false。理由：声称精确而实际含猜测，比明说近似更糟。
+test('精确与近似共存时 exact 为 false（v4 起从严）', () => {
   const nodes = [
     assistantNode({ seq: 10, messageId: 'm1', start: 0, end: 1000 }),
     assistantNode({ seq: 20, messageId: 'm2', start: 1000, end: 2000 }),
@@ -154,7 +156,7 @@ test('精确与近似可以共存，exact 仍为 true', () => {
   const currentModel = { provider: 'b', model: 'y', key: 'b/y' };
   const result = deriveModelEntries({ nodes, trajectory, currentModel });
 
-  assert.equal(result.exact, true);
+  assert.equal(result.exact, false, '有一条是近似的，整份就不能自称精确');
   const byKey = Object.fromEntries(result.entries.map((e) => [e.key, e]));
   assert.equal(byKey['a/x'].modelMs, 1000, '有路由的精确归属');
   assert.equal(byKey['b/y'].modelMs, 1000, '没路由的退回当前模型');
@@ -359,4 +361,226 @@ test('modelLabel：provider 与 model 同名时不重复显示', () => {
   assert.equal(modelLabel({ provider: 'deepseek', model: 'deepseek/deepseek-chat' }), 'deepseek-chat');
   assert.equal(modelLabel({ provider: 'anthropic', model: 'claude-opus' }), 'claude-opus');
   assert.equal(modelLabel(null), '');
+});
+// ── 归属记忆：换模型后旧账不会被重新归给新模型（v4 修的真实 bug）──
+//
+// 现象：先用 deepseek-chat 跑了 3 分钟，中途切到 claude-opus。之后每次全量重算时
+// 早先那 3 分钟因无轨迹可查，会被当前模型（claude-opus）重新认领 —— 用户看到
+// 「一换模型新模型就背上旧账」，且随重算次数越来越离谱。
+
+test('无记忆时：所有节点都归给当前模型', () => {
+  const nodes = [
+    assistantNode({ seq: 10, messageId: 'm1', turn: 1, start: 0, end: 1000 }),
+    assistantNode({ seq: 20, messageId: 'm2', turn: 2, start: 1000, end: 2000 }),
+  ];
+  const first = deriveModelEntries({
+    nodes,
+    trajectory: null,
+    currentModel: { provider: 'deepseek', model: 'chat', key: 'deepseek/chat' },
+    remembered: null,
+  });
+  assert.equal(first.entries.length, 1);
+  assert.equal(first.entries[0].modelMs, 2000);
+  assert.equal(Object.keys(first.memory).length, 2, '两个节点都应被记住');
+});
+
+test('换模型后重算：旧节点仍归旧模型，不被新模型认领', () => {
+  const nodes = [
+    assistantNode({ seq: 10, messageId: 'm1', turn: 1, start: 0, end: 3000 }),
+    assistantNode({ seq: 20, messageId: 'm2', turn: 2, start: 3000, end: 4000 }),
+  ];
+
+  // 第一次渲染：只有 deepseek/chat 在用，两条都归它。
+  const first = deriveModelEntries({
+    nodes,
+    trajectory: null,
+    currentModel: { provider: 'deepseek', model: 'chat', key: 'deepseek/chat' },
+    remembered: null,
+  });
+  assert.equal(first.entries[0].key, 'deepseek/chat');
+  assert.equal(first.entries[0].modelMs, 4000);
+
+  // 用户切到 claude-opus，新增一条调用。现在 currentModel 变了。
+  const nodesAfter = [
+    ...nodes,
+    assistantNode({ seq: 30, messageId: 'm3', turn: 3, start: 4000, end: 6000 }),
+  ];
+  const second = deriveModelEntries({
+    nodes: nodesAfter,
+    trajectory: null,
+    currentModel: { provider: 'anthropic', model: 'opus', key: 'anthropic/opus' },
+    remembered: first.memory,
+  });
+
+  const byKey = Object.fromEntries(second.entries.map((e) => [e.key, e]));
+  assert.equal(byKey['deepseek/chat'].modelMs, 4000, '旧的 4 秒必须留在 deepseek 名下');
+  assert.equal(byKey['anthropic/opus'].modelMs, 2000, '新模型只拿它自己那 2 秒');
+  assert.ok(second.entries.length === 2, '应有两个模型各一行');
+});
+
+test('记忆优先于 trajectory：已判定的事实不被后来的数据改写', () => {
+  const nodes = [assistantNode({ seq: 10, messageId: 'm1', turn: 1, start: 0, end: 1000 })];
+  const first = deriveModelEntries({
+    nodes,
+    trajectory: null,
+    currentModel: { provider: 'p', model: 'a', key: 'p/a' },
+    remembered: null,
+  });
+  // 之后 trajectory 突然给出了不同的路由 —— 记忆仍应生效（它记录的是当时的事实）。
+  const second = deriveModelEntries({
+    nodes,
+    trajectory: { requests: [{ resultSeq: 10, providerMetadata: { provider: 'p', model: 'b' } }] },
+    currentModel: { provider: 'p', model: 'b', key: 'p/b' },
+    remembered: first.memory,
+  });
+  assert.equal(second.entries[0].key, 'p/a', '记忆冻结归属');
+  assert.equal(second.entries[0].modelMs, 1000);
+});
+
+test('新出现的节点仍用当次 currentModel，记忆不阻塞增量', () => {
+  const nodes = [assistantNode({ seq: 10, messageId: 'm1', turn: 1, start: 0, end: 1000 })];
+  const first = deriveModelEntries({
+    nodes,
+    trajectory: null,
+    currentModel: { provider: 'p', model: 'a', key: 'p/a' },
+    remembered: null,
+  });
+  const second = deriveModelEntries({
+    nodes: [...nodes, assistantNode({ seq: 20, messageId: 'm2', turn: 2, start: 1000, end: 2000 })],
+    trajectory: null,
+    currentModel: { provider: 'p', model: 'b', key: 'p/b' },
+    remembered: first.memory,
+  });
+  const byKey = Object.fromEntries(second.entries.map((e) => [e.key, e]));
+  assert.equal(byKey['p/a'].modelMs, 1000);
+  assert.equal(byKey['p/b'].modelMs, 1000, '新节点用新的当前模型');
+});
+
+test('exact 只在每条都有精确归属时为真（混进近似就是近似）', () => {
+  const nodes = [
+    assistantNode({ seq: 10, messageId: 'm1', turn: 1, start: 0, end: 1000 }),
+    assistantNode({ seq: 20, messageId: 'm2', turn: 2, start: 1000, end: 2000 }),
+  ];
+  // 只有 m1 有轨迹，m2 只能近似 —— 此时整份不能自称精确。
+  const mixed = deriveModelEntries({
+    nodes,
+    trajectory: { requests: [{ resultSeq: 10, providerMetadata: { provider: 'p', model: 'a' } }] },
+    currentModel: { provider: 'q', model: 'z', key: 'q/z' },
+    remembered: null,
+  });
+  assert.equal(mixed.exact, false, '混入近似就不能说精确');
+  // 全都有轨迹时才是精确。
+  const all = deriveModelEntries({
+    nodes,
+    trajectory: {
+      requests: [
+        { resultSeq: 10, providerMetadata: { provider: 'p', model: 'a' } },
+        { resultSeq: 20, providerMetadata: { provider: 'p', model: 'a' } },
+      ],
+    },
+    currentModel: null,
+    remembered: null,
+  });
+  assert.equal(all.exact, true);
+});
+
+test('无 messageId 无 seq 的节点无法记忆，只能当次近似', () => {
+  const node = { kind: 'assistant', turn: 1, time: 100, timing: { stepStartTime: 0, completedTime: 500 } };
+  const first = deriveModelEntries({
+    nodes: [node],
+    trajectory: null,
+    currentModel: { provider: 'p', model: 'a', key: 'p/a' },
+    remembered: null,
+  });
+  assert.deepEqual(Object.keys(first.memory), [], '无稳定标识就不记忆');
+  assert.equal(first.entries[0].modelMs, 500);
+});
+
+// ── 圆环进度（v5）───────────────────────────────────────────────────
+
+test('ringProgress：未达第一档时从 0 起算', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const p = ringProgress({ elapsedMs: 5 * 60000, thresholdsMin: [20, 40, 60], modelMs: 0 });
+  assert.equal(p.ratio, 0.25, '5 分钟 / 20 分钟 = 0.25');
+  assert.equal(p.nextAtMs, 20 * 60000);
+});
+
+test('ringProgress：越过一档后重新蓄到下一档', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const p = ringProgress({ elapsedMs: 25 * 60000, thresholdsMin: [20, 40, 60], modelMs: 0 });
+  // 25 分钟：越过 20 那档，在 20→40 这一段里走了 5/20。
+  assert.equal(p.ratio, 0.25, '25 分钟落在 20→40 的四分之一处');
+  assert.equal(p.nextAtMs, 40 * 60000);
+});
+
+test('ringProgress：ratio 恒小于 1（环满即提醒，不越界）', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  for (const elapsed of [0, 20, 39, 61, 600, 100000]) {
+    const p = ringProgress({ elapsedMs: elapsed * 60000, thresholdsMin: [20, 40, 60], modelMs: 0 });
+    assert.ok(p.ratio >= 0 && p.ratio < 1, `${elapsed} 分钟的 ratio 应在 [0,1)，实际 ${p.ratio}`);
+  }
+});
+
+test('ringProgress：单档阈值也能工作', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const p = ringProgress({ elapsedMs: 5 * 60000, thresholdsMin: [10], modelMs: 0 });
+  assert.ok(p.ratio > 0 && p.ratio < 1);
+});
+
+test('ringProgress：无阈值时返回零值而不崩', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  assert.equal(ringProgress({ elapsedMs: 60000, thresholdsMin: [], modelMs: 0 }).ratio, 0);
+  assert.equal(ringProgress({ elapsedMs: 60000, thresholdsMin: null, modelMs: 0 }).ratio, 0);
+  assert.equal(ringProgress(null).ratio, 0);
+  assert.equal(ringProgress({}).ratio, 0);
+});
+
+test('ringProgress：畸形 elapsedMs 按 0 处理', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  for (const bad of [NaN, -1, null, undefined, 'x']) {
+    const p = ringProgress({ elapsedMs: bad, thresholdsMin: [20], modelMs: 0 });
+    assert.equal(p.ratio, 0, `${String(bad)} 应被当成 0`);
+  }
+});
+
+// ── formatElapsed：秒级精度（v5）─────────────────────────────────────
+// 「不到 1 分钟」对模型耗时没有信息量 —— 57 秒和 3 秒显示同一句话。
+// 不足一分钟时直接给秒。
+
+test('formatElapsed：不足一分钟给秒', () => {
+  const { formatElapsed } = loadModules(['dict.js']);
+  const t = (key, params) => `${key}(${JSON.stringify(params ?? {})})`;
+  assert.equal(formatElapsed(0, t), 'unit.secondShort({"n":1})', '0 也给 1 秒，不显示 0');
+  assert.equal(formatElapsed(1, t), 'unit.secondShort({"n":1})');
+  assert.equal(formatElapsed(57000, t), 'unit.secondShort({"n":57})');
+  assert.equal(formatElapsed(59999, t), 'unit.secondShort({"n":60})', '向上取整到 60');
+});
+
+test('formatElapsed：一分钟以上沿用分钟口径', () => {
+  // 用真实字典（formatElapsed 内部会调 formatDuration 并填参数），所以断言的是
+  // 最终文案而不是 key。
+  const { formatElapsed } = loadModules(['dict.js']);
+  const t = (key, params) =>
+    key === 'unit.secondShort'
+      ? `${params.n} 秒`
+      : key === 'unit.minute'
+        ? `${params.n} 分钟`
+        : key === 'unit.hour'
+          ? `${params.n} 小时`
+          : key === 'unit.hourMinute'
+            ? `${params.h} 小时 ${params.m} 分钟`
+            : key === 'unit.lessThanMinute'
+              ? '不到 1 分钟'
+              : key;
+  assert.equal(formatElapsed(60000, t), '1 分钟');
+  assert.equal(formatElapsed(185000, t), '3 分钟');
+  assert.equal(formatElapsed(3 * 3600000, t), '3 小时');
+});
+
+test('formatElapsed：畸形输入不抛', () => {
+  const { formatElapsed } = loadModules(['dict.js']);
+  const t = (key) => key;
+  for (const bad of [NaN, -5, null, undefined, 'x']) {
+    assert.doesNotThrow(() => formatElapsed(bad, t), `${String(bad)} 不该抛`);
+  }
 });

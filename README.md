@@ -35,9 +35,11 @@ To remove:
 request. Open a session, browse, think — the corner stays clean. Set the thresholds to empty and
 nothing shows either; the thresholds you set are the switch.
 
-**A reading, not a decoration.** One line: model name · time so far. Click it and the detail panel
-opens — a bar showing the split by model, model time vs. tool time, and a line per model with its
-turns and steps. It never blocks input, never takes focus, never makes a sound.
+**A reading, not a decoration.** A small ring in the top-right: the arc shows how far you are
+into the next rest threshold, the centre shows the model's time, and the label beside it names the
+current model. Click it and the detail panel opens — a bar splitting time by model, model time vs.
+tool time, and one line per model carrying the rating and note you gave it last time. It never
+blocks input, never takes focus, never makes a sound.
 
 **It knows which model did what.** Each assistant reply is timed with the same rule the host itself
 uses (`step/start` → the message completing), and attributed to the model that produced it. Switch
@@ -45,7 +47,8 @@ models mid-session and the split follows.
 
 **At each threshold, a reminder.** At 20 / 40 / 60 minutes of *active* time a reminder card appears
 with a 60-second countdown. If you don't click it, it shrinks to an unread badge that stays until
-you open it. The run can then be kept as a record card.
+you open it. Clicking either expands the ring — it already holds everything. The run can then be
+kept as a record card, which carries both this run's numbers and your all-time figures.
 
 **Say whether it worked.** The record card asks one question — did it get you there: **yes /
 mostly / no**. Three states, not a checkbox, because "mostly, with some rework" is the common

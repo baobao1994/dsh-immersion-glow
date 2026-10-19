@@ -440,3 +440,184 @@ test('图层在无会话 / 脏数据下渲染不抛错', () => {
     assert.doesNotThrow(() => hudElement(env), '图层崩了会顶掉整个 shell overlay');
   }
 });
+// ── v5：圆形计时器与提醒联动 ─────────────────────────────────────────
+
+test('收拢态渲染出圆环（svg + 中心读数）', () => {
+  const env = bootedWithData();
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const hud = findByClass(tree, 'ig-hud');
+  assert.ok(hud !== null, '应显示收拢态计时器');
+  assert.ok(findByClass(hud, 'ig-ring') !== null, '应有圆环');
+  assert.ok(findByClass(hud, 'ig-ring-text') !== null, '圆环中心应有读数');
+  assert.ok(findByClass(hud, 'ig-hud-model') !== null, '应有模型名');
+});
+
+test('点击计时器后展开明细面板', () => {
+  const env = bootedWithData();
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const hud = findByClass(tree, 'ig-hud');
+  // 走真实点击路径：onClick 写 store，图层重渲染后应换成面板。
+  hud.props.onClick();
+  assert.equal(env.instance.getSnapshot().ui.meterOpen, true, '展开态应落进 store');
+
+  const after = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  assert.equal(findByClass(after, 'ig-hud'), null, '收拢态应消失');
+  assert.ok(findByClass(after, 'ig-hud-panel') !== null, '应换成展开面板');
+});
+
+test('展开面板里显示逐模型历史评价与备注', () => {
+  const env = bootedWithData();
+  // 先给 deepseek 一条历史评价。
+  env.actions.addModelNote({
+    modelKey: 'deepseek/deepseek-chat',
+    rating: 4,
+    note: '写代码很稳',
+    recordId: 'old-1',
+  });
+  env.actions.setMeterOpen(true);
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const panel = findByClass(tree, 'ig-hud-panel');
+  assert.ok(panel !== null, '应有展开面板');
+
+  const labels = collectText(panel);
+  assert.ok(labels.includes('deepseek-chat'), '应出现模型名');
+  assert.ok(labels.includes('写代码很稳'), '历史备注原文应出现在面板里');
+});
+
+test('记录卡里出现「历史累计」区块', () => {
+  const env = bootedWithData();
+  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 5, note: '很好', recordId: 'old-1' });
+  env.actions.setCardOpen(true);
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const panel = findByClass(tree, 'ig-panel');
+  assert.ok(panel !== null, '记录卡应打开');
+  assert.ok(findByClass(panel, 'ig-history') !== null, '应有历史累计区块');
+  const labels = collectText(panel);
+  assert.ok(labels.includes('累计'), '应出现累计文案');
+});
+
+test('提醒卡点击后展开计时器而不是打开记录卡', () => {
+  const env = bootedWithData();
+  // 造一条 sticky 未读提醒。
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const body = findByClass(tree, 'ig-reminder-body');
+  assert.ok(body !== null, '应有提醒卡');
+
+  body.props.onClick();
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.meterOpen, true, '应展开计时器');
+  assert.equal(ui.cardOpen, false, '不再直接打开记录卡');
+  assert.equal(ui.reminder, null, '未读应被清除');
+});
+
+test('记录卡里的「本次」标记能区分历史条目', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const history = findByClass(tree, 'ig-history');
+  assert.ok(history !== null);
+  // 本次用到的模型应带「本次」标记。
+  assert.ok(findByClass(history, 'ig-history-now') !== null, '本次用到的模型应有标记');
+});
+
+/** 收集一棵元素树里所有文本节点的拼接串（用于「文案是否出现」类断言）。 */
+function collectText(node, depth = 0) {
+  if (node === null || node === undefined || depth > 14) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map((child) => collectText(child, depth + 1)).join('');
+  if (typeof node !== 'object') return '';
+  if (typeof node.type === 'function') return collectText(node.type(node.props ?? {}), depth + 1);
+  const props = node.props ?? {};
+  const className = String(props.class ?? props.className ?? '');
+  // 跳过 aria/title 这类非可视文本，否则断言会误判。
+  if (className.includes('ig-ring') || className.includes('ig-hud-model')) {
+    return collectText(node.children, depth + 1);
+  }
+  return collectText(node.children, depth + 1);
+}
+
+/** 起一个已「发起过」的环境：探针跑过一次，有模型与统计。 */
+function bootedWithData() {
+  const env = boot({
+    chat: chatSnapshot(),
+    trajectory: trajectorySnapshot(),
+    stats: { turns: 2, steps: 4, llmMs: 6000, toolMs: 900 },
+    tokens: { uncachedInputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 0 },
+    model: { next: { provider: 'anthropic', model: 'claude-opus' }, lastUsed: null },
+  });
+  env.runProbe('s1');
+  return env;
+}
+
+test('汇总页能真正渲染（不抛）—— 覆盖共享 helper 的真实调用路径', () => {
+  const env = bootedWithData();
+  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 4, note: '稳', recordId: 'r1' });
+  env.actions.setSummaryOpen(true);
+
+  // 之前 summary 复用 hud 的 figure()，而 figure 引用了局部变量 h ——
+  // 展开路径从未被任何测试走过，所以这个 ReferenceError 一直藏着。
+  assert.doesNotThrow(() => {
+    const tree = env.layer.component({
+      React: fakeReact(),
+      useImmersionGlow: env.selectorHook,
+      useSessions: () => undefined,
+      immersionGlowActions: env.actions,
+    });
+    const panel = findByClass(tree, 'ig-panel--wide');
+    assert.ok(panel !== null, '应渲染出汇总面板');
+    assert.ok(findByClass(panel, 'ig-summary-figures') !== null, '应渲染出指标格');
+  }, '共享 helper 在新签名下必须仍能工作');
+});
+
+test('详情面板里的三格指标都渲染出数值', () => {
+  const env = bootedWithData();
+  env.actions.setMeterOpen(true);
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const figures = findByClass(tree, 'ig-hud-figures');
+  assert.ok(figures !== null);
+  assert.ok(findByClass(figures, 'ig-hud-figure') !== null);
+});

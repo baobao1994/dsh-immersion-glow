@@ -57,7 +57,9 @@ function ReminderCard(props) {
   if (hasReminder !== true) return null;
   if (expired === true) {
     if (sticky !== true) return null;
-    // 未读徽标：点击 = 打开记录卡并清除未读。
+    // 未读徽标：点击 = 清除未读并**展开右上角圆形计时器**（v5）。
+    // 之前是打开记录卡；改成展开计时器是因为提醒说「该看看这次的任务」，
+    // 而计时器就在它旁边、且已经装着全部明细 —— 让用户多开一张卡没有意义。
     return React.createElement(
       'button',
       {
@@ -67,7 +69,7 @@ function ReminderCard(props) {
         'aria-label': t('reminder.unread'),
         onClick: () => {
           actions.countOpen();
-          actions.openFromReminder();
+          actions.openMeter();
         },
       },
       React.createElement('span', { class: 'ig-reminder-badge-dot', 'aria-hidden': 'true' }),
@@ -93,7 +95,7 @@ function ReminderCard(props) {
         type: 'button',
         onClick: () => {
           actions.countOpen();
-          actions.openFromReminder();
+          actions.openMeter();
         },
       },
       React.createElement('span', { class: 'ig-reminder-title' }, t('reminder.title')),

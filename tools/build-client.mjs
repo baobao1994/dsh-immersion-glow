@@ -52,9 +52,11 @@ const MODULES = [
   'styles.js',
   'reminder.js',
   'hud.js',
+  // summary.js 必须早于 record-card.js —— 后者复用前者的 rankModels 算
+  // 「历史累计」。模块共享一个闭包，用到谁就必须排在谁后面。
+  'summary.js',
   'record-card.js',
   'gallery.js',
-  'summary.js',
   'settings-row.js',
   'probe.js',
   'slots.js',
