@@ -484,7 +484,11 @@ function createActions() {
         at: now,
       };
       // 同一份记录、同一模型只留最新一条自评（改了主意就覆盖，不追加矛盾条目）。
-      const kept = notes.filter((item) => !(entry.recordId !== null && item.recordId === entry.recordId));
+      // ⚠ recordId 为 null 表示「当前这一轮」——它不是没有归属，而是归属此刻正在
+      // 看的这次运行。之前这里只在 `entry.recordId !== null` 时去重，导致每评一次
+      // 当前轮就追加一条，modelNotes 越攒越多（用户反馈「修改评价后多轮记录」）。
+      // 现在 null 也按记录去重：同一个记录（含当前轮）只能有一条，改了即覆盖。
+      const kept = notes.filter((item) => !(item.recordId === entry.recordId));
       const next = [entry, ...kept];
       draft.modelNotes[key] = {
         notes: next.length > MODEL_NOTE_LIMIT ? next.slice(0, MODEL_NOTE_LIMIT) : next,

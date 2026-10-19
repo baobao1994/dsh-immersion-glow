@@ -336,6 +336,27 @@ test('模型备注落盘，且同一记录同一模型覆盖而非追加矛盾�
   assert.equal(notes[0].note, '改主意');
 });
 
+test('模型备注：当前轮（recordId 为空）修改只更新这一轮，不追加新条目', () => {
+  const env = boot({});
+  // 给「正在看的这一轮」的模型评 3 分。
+  env.actions.addModelNote({ modelKey: 'p/m', rating: 3, note: '第一版', now: 1000 });
+  // 改了主意 —— 没传 recordId（就是当前轮），此前这里会追出一条新记录。
+  env.actions.addModelNote({ modelKey: 'p/m', rating: 5, note: '改成 5', now: 2000 });
+
+  const notes = env.instance.getSnapshot().modelNotes['p/m'].notes;
+  assert.equal(notes.length, 1, '当前轮修改应覆盖而不是堆积多轮');
+  assert.equal(notes[0].rating, 5);
+  assert.equal(notes[0].note, '改成 5');
+});
+
+test('模型备注：不同记录各自独立，不会被当前轮的覆盖误伤', () => {
+  const env = boot({});
+  env.actions.addModelNote({ modelKey: 'p/m', rating: 4, note: '历史那条', recordId: 'old-1' });
+  env.actions.addModelNote({ modelKey: 'p/m', rating: 3, note: '当前这条', recordId: null });
+  const notes = env.instance.getSnapshot().modelNotes['p/m'].notes;
+  assert.equal(notes.length, 2, '历史记录与当前轮各自保留');
+});
+
 test('模型备注拒绝非法评分', () => {
   const env = boot({});
   env.actions.addModelNote({ modelKey: 'p/m', rating: 9 });
@@ -440,10 +461,11 @@ test('展开面板里显示逐模型历史评价与备注', () => {
   assert.ok(labels.includes('写代码很稳'), '历史备注原文应出现在面板里');
 });
 
-test('记录卡里出现「历史累计」区块', () => {
+// 记录卡不再渲染跨会话「历史累计」。（v-2026-10 用户反馈：历史累计列的是其它
+// 会话用过的模型，和「看这次记录卡」无关 —— 只想看本次用了哪些模型并打分。）
+test('记录卡不再渲染跨会话「历史累计」区块', () => {
   const env = bootedWithData();
-  // 前置条件：那个模型要在**历史会话**里真的用过（有累计用量）。
-  // 只有评价没有用量的模型不进历史 —— 历史区块回答的是「以前用过多久」。
+  // 造一个只用过 old/gpt-x 的历史会话，外加它的评分备注。
   env.actions.writeSession({
     sessionId: 'old-session',
     now: Date.now(),
@@ -455,46 +477,31 @@ test('记录卡里出现「历史累计」区块', () => {
   const tree = render(env);
   const panel = findByClass(tree, 'ig-panel');
   assert.ok(panel !== null, '记录卡应打开');
-  assert.ok(findByClass(panel, 'ig-history') !== null, '应有历史累计区块');
-  assert.ok(collectText(panel).includes('累计'), '应出现累计文案');
+  assert.equal(findByClass(panel, 'ig-history'), null, '跨会话历史区块应彻底移除');
+  assert.ok(!collectText(panel).includes('累计'), '不应再出现跨会话「累计」文案');
 });
 
-test('历史区块排除本次已列出的模型（不与「各模型」重复）', () => {
+test('记录卡只列本次会话用过的模型（不含其它会话的模型）', () => {
   const env = bootedWithData();
-  // 本次用的两个模型都给评价 —— 它们已经由「各模型」区块完整展示了。
   env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 5, note: '稳', recordId: 'r1' });
   env.actions.addModelNote({ modelKey: 'anthropic/claude-opus', rating: 3, note: '一般', recordId: 'r2' });
-  env.actions.setCardOpen(true);
-
-  const tree = render(env);
-  const history = findByClass(tree, 'ig-history');
-  assert.equal(history, null, '本次的模型已在「各模型」里列过，历史不该重复它们');
-
-  // 反证：这些模型确实出现在「各模型」区块里。
-  const models = findByClass(tree, 'ig-models');
-  assert.ok(models !== null);
-  const text = collectText(models);
-  assert.ok(text.includes('deepseek-chat') && text.includes('claude-opus'));
-});
-
-test('历史区块只显示本次没用过、但你用过的模型', () => {
-  const env = bootedWithData();
-  // 造第二个会话，里面用了另一个模型。
+  // 其它会话里用过的模型，绝不能出现在本次记录卡里。
   env.actions.writeSession({
     sessionId: 'old-session',
     now: Date.now(),
     models: [{ key: 'old/gpt-x', provider: 'old', model: 'gpt-x', modelMs: 900000, steps: 8, turns: 4, lastUsedAt: 1 }],
   });
-  env.actions.addModelNote({ modelKey: 'old/gpt-x', rating: 4, note: '老搭档', recordId: 'r9' });
   env.actions.setCardOpen(true);
 
   const tree = render(env);
-  const history = findByClass(tree, 'ig-history');
-  assert.ok(history !== null, '应出现历史区块');
-  const text = collectText(history);
-  assert.ok(text.includes('gpt-x'), '应出现只在历史里的模型');
-  assert.ok(text.includes('老搭档'), '应带上它的备注');
-  assert.ok(!text.includes('deepseek-chat'), '本次的模型不该重复出现');
+  assert.equal(findByClass(tree, 'ig-history'), null, '不再有跨会话历史区块');
+
+  // 本次的模型仍由「各模型」区块完整展示（可给它们打分）。
+  const models = findByClass(tree, 'ig-models');
+  assert.ok(models !== null, '本次会话的模型列表仍在');
+  const text = collectText(models);
+  assert.ok(text.includes('deepseek-chat') && text.includes('claude-opus'), '本次模型应列出');
+  assert.ok(!text.includes('gpt-x'), '其它会话的模型不应出现');
 });
 
 // v6：提醒不再是独立卡片，而是计时器的一种状态。
@@ -620,7 +627,7 @@ test('非 sticky 提醒到点即消失（不留下未读态）', () => {
   assert.equal(findByClass(tree, 'ig-ring--alert'), null, '也不该是倒计时态');
 });
 
-test('历史区块里的模型不再需要「本次」标记（去重后它必然不是本次的）', () => {
+test('记录卡里不再有跨会话「历史」标记类残留（old/gpt-x 不侵入本次卡）', () => {
   const env = bootedWithData();
   env.actions.writeSession({
     sessionId: 'old-session',
@@ -631,12 +638,9 @@ test('历史区块里的模型不再需要「本次」标记（去重后它必�
 
   const tree = render(env);
   const history = findByClass(tree, 'ig-history');
-  assert.ok(history !== null);
-  assert.equal(
-    findByClass(history, 'ig-history-now'),
-    null,
-    '去重后历史里不该再有本次的模型，那个标记也就不必存在了',
-  );
+  assert.equal(history, null, '跨会话历史区块已移除');
+  assert.equal(findByClass(tree, 'ig-history-now'), null, '「本次」标记类残留也不该存在');
+  assert.ok(!collectText(tree).includes('gpt-x'), '其它会话的模型不应出现在本次记录卡');
 });
 
 
@@ -794,6 +798,21 @@ test('打开汇总或画廊时收拢态同样让位', () => {
     const tree = render(env);
     assert.equal(findByClass(tree, 'ig-hud'), null, `${flag} 打开时收拢态必须让位`);
   }
+});
+
+test('点记录卡的遮罩（closeCard）能真正关掉记录卡', () => {
+  const env = bootedWithData();
+  const handlers = buildHandlers(env);
+  assert.equal(typeof handlers.closeCard, 'function', 'closeCard 必须已接线（曾缺失）');
+
+  handlers.openCard();
+  assert.equal(env.instance.getSnapshot().ui.cardOpen, true, '前置：记录卡已打开');
+
+  // 点遮罩只关记录卡，不把其它面板/展开态拖进来。
+  handlers.closeCard();
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.cardOpen, false, 'closeCard 应关掉记录卡（修复「收起又弹回来」）');
+  assert.equal(ui.meterOpen, false, '只关卡片，不该顺手展开计时器');
 });
 
 test('「返回」把面板换成展开态计时器（不塌回收拢态）', () => {

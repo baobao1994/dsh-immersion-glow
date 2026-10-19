@@ -25,9 +25,6 @@ const CLOSE_ANIMATION_MS = 450;
 /** 一行备注的最大长度（与 state.js 的 MODEL_NOTE_LIMIT 一致量级）。 */
 const NOTE_MAX = 200;
 
-/** 记录卡里「历史累计」最多列几个模型。多于此就该去汇总页看了。 */
-const HISTORY_ROWS = 4;
-
 /**
  * 安全取值：把可能为 undefined 的指标变成可渲染值。
  * @param metrics - store 里的 metrics。
@@ -265,50 +262,6 @@ function RecordCard(props) {
   };
 
   // ── 目的确认 ──────────────────────────────────────────────────────
-  // ── 历史累计行 ─────────────────────────────────────────────────────
-  // rankModels 是纯函数（summary.js），复用它算跨会话排行。
-  //
-  // ⚠ **必须排除本次已出现的模型**：上面「各模型」区块已经列了它们，连带评分和
-  // 备注。在历史里再列一遍就是同一屏出现两遍同样的内容（实测截图确认）——
-  // 历史区块的价值恰恰在于「本次没用到、你以前常用」的那些模型。
-  //
-  // 只取前几条：记录卡是「看这次」的地方，历史越列越长就越界了。
-  const presentKeys = modelEntries.map((item) => item.key);
-  const historyRows = rankModels(props.sessions)
-    .filter((entry) => presentKeys.indexOf(entry.key) === -1)
-    .slice(0, HISTORY_ROWS);
-
-  /** 历史累计的一行。 */
-  const historyRow = (entry) => {
-    const key = entry.key;
-    const notes = Array.isArray(modelNotes[key]?.notes) ? modelNotes[key].notes : [];
-    const rating =
-      notes.length > 0
-        ? notes.reduce((sum, item) => sum + (Number.isFinite(item?.rating) ? item.rating : 0), 0) /
-          notes.length
-        : 0;
-    return h(
-      'li',
-      { class: 'ig-history-row', key },
-      h(
-        'div',
-        { class: 'ig-hud-row-head' },
-        h('span', { class: 'ig-hud-row-model' }, modelLabel(entry)),
-        rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
-        h('span', { class: 'ig-hud-row-time' }, formatElapsed(entry.modelMs, t)),
-      ),
-      h(
-        'div',
-        { class: 'ig-hud-row-sub' },
-        [t('card.history.sessions', { n: entry.turns }), t('card.history.calls', { n: entry.steps })]
-          .join(' · '),
-      ),
-      notes.length > 0 && typeof notes[0].note === 'string' && notes[0].note.length > 0
-        ? h('p', { class: 'ig-note ig-note--quote' }, notes[0].note)
-        : null,
-    );
-  };
-
   const verdictButtons = ['yes', 'partial', 'no'].map((value) =>
     h(
       'button',
@@ -403,18 +356,11 @@ function RecordCard(props) {
           )
         : h('p', { className: 'ig-note' }, t('card.models.empty')),
 
-      // ── 历史累计（v5）────────────────────────────────────────────
-      // 「这次任务里哪个模型好使」和「我历次用下来觉得哪个好使」是两个问题。
-      // 上面那份答前者；这里答后者 —— 每个模型累计跑了多久、写过几次、评分多少。
-      // 不做单独页面，因为评价与数字并排才看得出关联，拆开就没意义了。
-      historyRows.length > 0
-        ? h(
-            'div',
-            { className: 'ig-block' },
-            h('h3', { className: 'ig-block-title' }, t('card.history')),
-            h('ul', { className: 'ig-history' }, historyRows.map(historyRow)),
-          )
-        : null,
+      // ── 历史累计已移除 ────────────────────────────────────────────
+      // 用户反馈：历史累计列的是其它会话用过的模型，和「看这次记录卡」无关。
+      // 记录卡就讲本次会话：用了哪些模型、各花多久、打得几分 —— 这些「各模型」
+      // 区块（上面）已经原样列全了，再接一段跨会话排行只会引入这次没碰的模型，
+      // 让人误以为本会话用过。要看历史上常用哪些模型，去汇总页。
 
       // ── 目的确认 ──────────────────────────────────────────────────
       h(

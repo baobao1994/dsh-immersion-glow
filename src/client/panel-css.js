@@ -37,6 +37,7 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   width: min(360px, calc(100vw - 32px));
   max-height: min(70vh, 560px);
   overflow: auto;
+  scrollbar-width: none;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -49,6 +50,18 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   color: var(--dsw-alias-label-primary, currentColor);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
   animation: ig-panel-push 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 隐藏右侧滚动条（只藏不废）：面板内容超出高度时仍可滚，但不再露出一条
+ * 常驻的滚动条 —— 这是右侧栏「本就该无痕」的视觉（用户反馈）。
+ * scrollbar-width 管 Firefox；::-webkit-scrollbar 管 Chromium/WebKit。
+ */
+.ig-panel::-webkit-scrollbar,
+.ig-hud-panel::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /*
@@ -566,6 +579,7 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   width: min(340px, calc(100vw - 32px));
   max-height: min(70vh, 560px);
   overflow: auto;
+  scrollbar-width: none;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1100,31 +1114,6 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 .ig-verdict-dot--no {
   color: var(--dsw-alias-label-error, #d64545);
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-}
-
-/* ── 历史累计（v5）───────────────────────────────────────────────── */
-/*
- * 与逐模型明细视觉上刻意不同：历史是「背景信息」，本次才是主角。所以它用
- * 更轻的底色（透明 + 一道细边），而本次明细用实心底板。两者放在一起时
- * 眼睛会先落在本次上 —— 顺序与权重一致。
- */
-.ig-history {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ig-history-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 7px 9px;
-  border-radius: var(--dsw-radius-md, 10px);
-  border: 0.5px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.16));
-  min-width: 0;
 }
 
 /* ── 汇总面板 ─────────────────────────────────────────────────────── */

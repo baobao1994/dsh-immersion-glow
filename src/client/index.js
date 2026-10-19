@@ -441,6 +441,16 @@ function apply(ctx) {
       actions.setSummaryOpen(false);
       actions.setGalleryOpen(true);
     },
+    /**
+     * 只关记录卡（点遮罩用）；顶部按钮走 backToMeter。
+     *
+     * ⚠ 这个 handler 曾经缺失：record-card 点遮罩走 `handlers.closeCard()`，而它
+     * 从未被定义。于是 close() 先把面板设成 closing（淡出），setTimeout 里再
+     * `setClosing(false)` 让面板淡回来，随后 `handlers.closeCard()` 抛
+     * TypeError —— 卡表现为「点空白收起后又弹出来」，永远关不掉（用户反馈）。
+     * 现在与 closeGallery / closeSummary 对齐，只关记录卡，不动其它面板。
+     */
+    closeCard: () => actions.setCardOpen(false),
     /** 只关画廊（点遮罩用）；顶部按钮走 backToMeter。 */
     closeGallery: () => actions.setGalleryOpen(false),
     openSummary: () => {
