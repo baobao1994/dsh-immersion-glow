@@ -1232,6 +1232,23 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
 }
 
+/* 清除备注：低干扰的次级动作，靠右且弱色，不与主读数抢注意力。 */
+.ig-summary-clear {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 16px;
+  padding: 2px 0;
+}
+
+.ig-summary-clear:hover {
+  color: var(--dsw-alias-label-error, #d64545);
+}
+
 /* ── 画廊：任务名优先 ─────────────────────────────────────────────── */
 .ig-row-title {
   font-size: 13px;

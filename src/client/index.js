@@ -402,6 +402,9 @@ function apply(ctx) {
     /** 记一条模型自评。 */
     rateModel: (payload) => actions.addModelNote({ ...payload, now: Date.now() }),
 
+    /** 清掉某个模型的全部备注（汇总面板里的入口，也是 modelNotes 唯一的收敛路径）。 */
+    clearModelNotes: (modelKey) => actions.clearModelNotes(modelKey),
+
     /** 收藏当前时段。 */
     saveCurrentRecord: () => {
       const snapshot = state();
@@ -433,6 +436,9 @@ function apply(ctx) {
           verdict: currentVerdict.verdict,
           note: currentVerdict.note,
         });
+        // 迁完就删：那条评价现在属于这条收藏了，'current' 继续留着会让
+        // 「下一次运行」一开始就带着上一次的答案。
+        actions.clearVerdict('current');
       }
       actions.showReminder({ message: t('card.saved') });
     },

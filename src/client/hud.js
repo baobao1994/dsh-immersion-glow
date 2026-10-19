@@ -255,9 +255,9 @@ function CornerMeter(props) {
         // ── 第二行：副行，只在需要解释第一行时才出现 ─────────────────
         // 常态：说清这个数是什么（「模型耗时 4 分钟」），因为中心那个「4」在
         // 44px 的圆里是个没有单位的数，不解释它就是天书。
-        // 提醒态：换成「还有多久收起」——这是提醒态下唯一需要额���说明的事。
+        // 提醒态：换成「还有多久收起」——这是提醒态下唯一需要额外说明的事。
         alert === null
-          ? h('span', { class: 'ig-hud-sub-line' }, t('hud.modelTime'), ' · ', progressLabel(t, activeMs, snapshot.settings.thresholdsMin))
+          ? h('span', { class: 'ig-hud-sub-line' }, t('hud.modelTime'), ' · ', progressLabel(t, progress, activeMs))
           : alert.mode === 'countdown'
             ? h('span', { class: 'ig-hud-sub-line ig-hud-sub-line--alert' }, t('hud.alert.seconds', { n: alert.secondsLeft }))
             : null,
@@ -291,13 +291,11 @@ function CornerMeter(props) {
       h(
         'div',
         { class: 'ig-hud-row-sub' },
-        [
-          t('hud.turns', { n: entry.turns }),
-          t('hud.steps', { n: entry.steps }),
-          entry.cancelledMs > 0 ? formatElapsed(entry.cancelledMs, t) : null,
-        ]
-          .filter((piece) => piece !== null && String(piece).length > 0)
-          .join(' · '),
+        // 只有模型条目 schema 里真实存在的字段。早先这里还拼过一个
+        // `entry.cancelledMs`，但那个字段**没有任何生产者**（见 model-log.js 的
+        // emptyModelEntry）—— `undefined > 0` 恒为 false，整段是死代码，
+        // 还让人误以为「中断耗时」这个能力存在。已删除。
+        [t('hud.turns', { n: entry.turns }), t('hud.steps', { n: entry.steps })].join(' · '),
       ),
 
       // 历史评价：把上次那句备注直接亮出来，否则数字与判断是脱节的。
@@ -412,15 +410,22 @@ function CornerMeter(props) {
  * 常驻提示形态（「还有 12 分钟」）比倒计时形态（「12s 后收起」）适合常态：
  * 前者说的是用户在意的未来时间点，后者说的是一个即将消失的 UI 元素。
  *
+ * ⚠ 必须**接收算好的 progress**，不要在这里再调一次 ringProgress。
+ *
+ * 早先版本自己重算了一遍（相同输入），于是同一次渲染里同一语义算两次。两次
+ * 结果一旦分叉，就会出现「环显示快满了、副行却说还有 12 分钟」这种自相矛盾 ——
+ * 而这正是 v11「卡在 1 秒」的成因模式：**同一语义两处实现，其中一处漏了修正**。
+ * 环与文案来自同一个数，就不可能互相打架。
+ *
  * @param t - 翻译函数。
+ * @param progress - 已经算好的 ringProgress 结果。
  * @param activeMs - 当前净活跃毫秒。
- * @param thresholdsMin - 阈值数组。
  * @returns 文案。
  */
-function progressLabel(t, activeMs, thresholdsMin) {
-  const progress = ringProgress({ elapsedMs: activeMs, thresholdsMin, modelMs: 0 });
-  const remainingMs = Math.max(0, progress.nextAtMs - (Number.isFinite(activeMs) ? activeMs : 0));
-  if (progress.nextAtMs <= 0) return '';
+function progressLabel(t, progress, activeMs) {
+  if (progress === null || progress === undefined || progress.nextAtMs <= 0) return '';
+  const elapsed = Number.isFinite(activeMs) ? activeMs : 0;
+  const remainingMs = Math.max(0, progress.nextAtMs - elapsed);
   return t('hud.restIn', { duration: formatElapsed(remainingMs, t) });
 }
 

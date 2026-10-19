@@ -658,3 +658,43 @@ test('档位不封顶：nextAtMs 随活跃时长单调递增', () => {
     previous = p.nextAtMs;
   }
 });
+
+// ── P0-1：模型条目 schema 守卫 ────────────────────────────────────────
+//
+// 真实 bug：hud.js / record-card.js 都读 `entry.cancelledMs`，但
+// emptyModelEntry() 从来不产出这个字段 —— `undefined > 0` 恒为 false，
+// 整段是死代码，还让人以为「中断耗时」这个能力存在。
+//
+// 这类「消费端有、生产端无」的字段靠读代码很难发现（两边分开看都合理），
+// 所以这里把 schema 钉死：任何新增/删除字段都会让这组断言失败，强迫改的人
+// 同时检查所有消费端。
+
+test('模型条目 schema 是固定的一组字段（新增/删除字段会在此失败）', () => {
+  const { modelEntriesToArray } = loadModules(['session-log.js', 'model-log.js']);
+  const produced = modelEntriesToArray([
+    {
+      key: 'p/m', provider: 'p', model: 'm', modelMs: 1, steps: 2, turns: 3, lastUsedAt: 4,
+      // 故意塞一个不该存在的字段：它必须被剥掉，不能穿透到消费端。
+      cancelledMs: 999,
+    },
+  ]);
+  assert.equal(produced.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(Object.keys(produced[0]))).sort(),
+    ['key', 'lastUsedAt', 'model', 'modelMs', 'provider', 'steps', 'turns'],
+    '模型条目只应有这 7 个字段；改了这里就要同步检查 hud.js / record-card.js / summary.js 的消费端',
+  );
+  assert.equal('cancelledMs' in produced[0], false, '没有生产者的字段不该穿透');
+});
+
+test('持久化恢复同样只保留已知字段', () => {
+  const { modelEntriesFromArray } = loadModules(['session-log.js', 'model-log.js']);
+  const restored = modelEntriesFromArray([
+    { key: 'p/m', provider: 'p', model: 'm', modelMs: 1, steps: 2, turns: 3, lastUsedAt: 4, cancelledMs: 999 },
+  ]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(Object.keys(restored[0]))).sort(),
+    ['key', 'lastUsedAt', 'model', 'modelMs', 'provider', 'steps', 'turns'],
+    '恢复路径也要收敛到同一组字段',
+  );
+});

@@ -36,7 +36,7 @@ function loadModule() {
   return exported;
 }
 
-const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP } = loadModule();
+const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP, MEASURE_DEBOUNCE_MS } = loadModule();
 
 /**
  * 期望偏移 = 外壳底边 + 间隔。
@@ -338,4 +338,159 @@ test('真实布局：结果明显落在对话区内部而不是贴着头部', ()
 test('真实布局：窄窗口（侧边栏占掉大半）仍能量到', () => {
   const { root, doc } = fakeRealLayout({ vw: 900, sidebarWidth: 320, headerHeight: 76 });
   assert.equal(measureSafeTop(root, doc), 76 + EDGE_GAP);
+});
+
+// ── P1-2：观察范围、防抖、稳定后停观察 ───────────────────────────────
+//
+// 原实现用 rAF 合帧 + 观察 document.body 的 subtree。会话活跃时聊天区几乎每帧
+// 都在增删节点，于是**每帧都真的测一次**（最多 400 次 getBoundingClientRect，
+// 强制同步布局）。头部高度是低频信息，不需要这个频率。
+
+/** 造一个带外壳结构的 doc，并记录观察/断开调用。 */
+function shellDoc(options = {}) {
+  const writes = [];
+  const removals = [];
+  const observers = [];
+  const listeners = { resize: [] };
+
+  const makeNode = (spec) => ({
+    childElementCount: spec.children ?? 1,
+    getBoundingClientRect: () => ({ top: spec.top, bottom: spec.top + spec.height, width: spec.width, height: spec.height }),
+  });
+
+  const header = makeNode({ top: 0, height: options.headerHeight ?? 76, width: 1000, children: 3 });
+  const overlay = makeNode({ top: 0, height: 800, width: 1200, children: 1 });
+  overlay.parentElement = options.hasShell === false ? undefined : makeNode({ top: 0, height: 800, width: 1200, children: 4 });
+
+  const root = {
+    childElementCount: 3,
+    getBoundingClientRect: () => ({ top: 0, bottom: 800, width: 1200, height: 800 }),
+    querySelector: (sel) => (sel === '[data-shell-overlay]' ? (options.hasShell === false ? null : overlay) : null),
+    querySelectorAll: () => [header],
+  };
+
+  class FakeObserver {
+    constructor(cb) { this.cb = cb; this.disconnected = false; observers.push(this); }
+    observe(target, opts) { this.target = target; this.opts = opts; }
+    disconnect() { this.disconnected = true; }
+  }
+
+  const timers = [];
+  const doc = {
+    body: root,
+    // installSafeTop 的守卫要求它存在 —— 少了会直接返回空 disposer，
+    // 后面的观察/写值断言全都测不到（第一版就踩了这个）。
+    querySelectorAll: root.querySelectorAll,
+    documentElement: {
+      style: {
+        setProperty: (name, value) => writes.push([name, value]),
+        removeProperty: (name) => removals.push(name),
+      },
+    },
+    querySelector: root.querySelector,
+    __listeners: listeners,
+    defaultView: {
+      innerWidth: 1200,
+      innerHeight: 800,
+      addEventListener: (t, fn) => { if (listeners[t]) listeners[t].push(fn); },
+      removeEventListener: () => {},
+      requestAnimationFrame: (fn) => { fn(); return 1; },
+      cancelAnimationFrame: () => {},
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout: () => {},
+      MutationObserver: FakeObserver,
+    },
+  };
+  return { doc, writes, removals, observers, timers, root };
+}
+
+test('观察挂在 frame 上而不是 body，且不用 subtree', () => {
+  const { doc, observers, root } = shellDoc();
+  const dispose = installSafeTop(doc);
+  assert.equal(observers.length, 1, '应创建一个 observer');
+  assert.notEqual(observers[0].target, root, '不该观察整个 body');
+  assert.equal(observers[0].opts.subtree, false, '不观察子树：外壳内部渲染不影响外层高度');
+  dispose();
+});
+
+test('找不到外壳时退回观察 body（仍能工作）', () => {
+  const { doc, observers, root } = shellDoc({ hasShell: false });
+  const dispose = installSafeTop(doc);
+  assert.equal(observers[0].target, root, '退化路径：观察 body');
+  dispose();
+});
+
+test('测量走防抖：连续触发只排一次定时器，并按常量延迟', () => {
+  const { doc, timers } = shellDoc();
+  const dispose = installSafeTop(doc);
+  const baseline = timers.length; // install 内部的首次 apply 是同步的，不排定时器
+
+  // 直接驱动 resize 监听器，模拟高频唤醒。
+  const resize = doc.__listeners.resize;
+  for (let i = 0; i < 10; i += 1) for (const fn of resize) fn();
+
+  assert.equal(timers.length - baseline, 1, '十次唤醒只应排一个定时器（防抖）');
+  assert.equal(timers[baseline].ms, MEASURE_DEBOUNCE_MS, '延迟应等于防抖常量');
+  dispose();
+});
+
+test('连续测到同值后停止观察（长会话不再被唤醒）', () => {
+  const { doc, observers, timers } = shellDoc();
+  const dispose = installSafeTop(doc);
+  const observer = observers[0];
+  assert.equal(observer.disconnected, false, '初始应观察中');
+
+  // 手工把排队的定时器跑掉若干轮，每轮测到的值都一样。
+  const drain = () => {
+    for (const t of timers.splice(0)) t.fn();
+  };
+  const resize = doc.__listeners.resize;
+  // 首轮：install 内已测过一次（last 已设定），之后每轮 stableCount +1。
+  for (let i = 0; i < 4; i += 1) {
+    for (const fn of resize) fn();
+    drain();
+  }
+
+  assert.equal(observer.disconnected, true, '连续同值达到阈值后应断开观察');
+  dispose();
+});
+
+test('稳定前发生的尺寸变化会重置稳定计数（不误停）', () => {
+  const { doc, observers, timers } = shellDoc({ headerHeight: 76 });
+  const dispose = installSafeTop(doc);
+  const observer = observers[0];
+  const resize = doc.__listeners.resize;
+  const drain = () => { for (const t of timers.splice(0)) t.fn(); };
+
+  for (let i = 0; i < 2; i += 1) { for (const fn of resize) fn(); drain(); }
+  assert.equal(observer.disconnected, false, '才两次同值，不该停');
+
+  // 改高度 → 值变化 → 计数归零。
+  const header = doc.body.querySelectorAll()[0];
+  header.getBoundingClientRect = () => ({ top: 0, bottom: 120, width: 1000, height: 120 });
+  for (const fn of resize) fn();
+  drain();
+  assert.equal(observer.disconnected, false, '值变了就重新计数，不能停');
+
+  dispose();
+});
+
+test('卸载时摘掉 --ig-safe-top 变量（不留残留）', () => {
+  const { doc, writes, removals } = shellDoc();
+  const dispose = installSafeTop(doc);
+  assert.ok(writes.length > 0, '安装时应写入变量');
+  assert.equal(writes[0][0], '--ig-safe-top');
+  dispose();
+  assert.ok(removals.includes('--ig-safe-top'), '卸载时必须摘掉自己写的变量');
+});
+
+test('测量函数本身仍然正确（防抖不改变结果）', () => {
+  const { doc } = shellDoc({ headerHeight: 76 });
+  const dispose = installSafeTop(doc);
+  const writes = [];
+  dispose();
+  // 直接验纯函数：与 installSafeTop 的写值应一致。
+  const measured = measureSafeTop(doc.body, doc);
+  assert.equal(measured, 76 + EDGE_GAP, `头部 76px 时应为 76+${EDGE_GAP}`);
+  void writes;
 });

@@ -324,6 +324,53 @@ if (clientBundleText.length > 0) {
   }
 }
 
+// ── 10. 每个 store action 都必须有 UI 调用点 ─────────────────────────
+//
+// 这条检查来自三次真实事故（v12 的「未读永远消不掉」最典型）：
+//
+//   v6 把提醒从独立卡片改成计时器状态时删掉了 ReminderCard 组件，
+//   而 `openMeter` / `dismissReminder` 的**唯一调用点**就在那个组件里。
+//   两个 action 定义完整、单测全绿，却没有任何 UI 调用它们 —— 提醒变成
+//   永远消不掉的红点，状态机测试完全测不出来。
+//
+// 「状态层有实现」不等于「功能可用」。所以这里做静态接线检查：state.js 里
+// 定义的每个 action，都必须在本文件之外被 `actions.X` 或 `handlers.X` 调到。
+//
+// 白名单只放真正需要例外的：由外部（测试 / 宿主）驱动的，或者刻意保留的。
+const ACTION_ALLOWLIST = new Set([
+  // 测试直接驱动状态机，不需要 UI 入口。
+  'resetAll',        // 设置行的「清除数据」用 handlers 包装，但 action 名不同
+  'resetTransient',  // apply() 启动时调用（在 index.js 里，算调用点）
+  'rollDay',         // tick 内部调用
+  'switchSession',   // 探针认领 / sessions 订阅调用
+  'writeSession',    // 探针泵数据调用
+  'setSessionModel', // 探针调用
+  'countImpression', // tick 触发阈值时调用
+]);
+
+{
+  const stateSource = readFileSync(join(ROOT, 'src', 'client', 'state.js'), 'utf8');
+  const declared = [...stateSource.matchAll(/^    ([a-zA-Z][a-zA-Z0-9]*)\(draft/gm)].map((m) => m[1]);
+  expect(declared.length > 10, `没能从 state.js 解析出 action 列表（只找到 ${declared.length} 个），检查正则是否与写法脱节`);
+
+  // 除 state.js 外的所有客户端源码 + 全部测试：任何一个调过就算接上了。
+  const consumers = [
+    ...sourceFiles.filter((name) => name !== 'state.js').map((name) => readFileSync(join(clientDir, name), 'utf8')),
+    ...(existsSync(join(ROOT, 'test'))
+      ? readdirSync(join(ROOT, 'test')).filter((n) => n.endsWith('.mjs')).map((n) => readFileSync(join(ROOT, 'test', n), 'utf8'))
+      : []),
+  ].join('\n');
+
+  for (const action of declared) {
+    if (ACTION_ALLOWLIST.has(action)) continue;
+    const pattern = new RegExp(`(?:actions|handlers)[.$]${action}\\b`);
+    expect(
+      pattern.test(consumers),
+      `state.js 的 action "${action}" 没有任何调用点 —— 状态层有实现但功能不可用（参见 v12 未读提醒事故）。要么接上 UI，要么删掉它，要么加进 ACTION_ALLOWLIST 并说明理由`,
+    );
+  }
+}
+
 // ── 汇总 ───────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ 产物自检失败（${failures.length} 项）：`);
@@ -331,4 +378,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`✓ 产物自检通过（清单 / patch / locale / 零网络 / require 白名单 / 沙箱注册 ${sourceFiles.length} 个模块）`);
+console.log(
+  `✓ 产物自检通过（清单 / patch / locale / 零网络 / require 白名单 / action 接线 / 沙箱注册 ${sourceFiles.length} 个模块）`,
+);

@@ -329,6 +329,16 @@ function createActions() {
      */
     switchSession(draft, payload) {
       const sessionId = payload.sessionId;
+      // 真正换了会话（不是同 id 的幂等认领）时，把挂在 'current' 上的目的评价清掉。
+      //
+      // 为什么：'current' 表示「正在看的这一次运行」，切到别的会话后它既不是
+      // 当前会话的、也不是任何收藏的 —— 留着只会在下一个会话里冒出来冒充新评价。
+      // 探针每次渲染都会用同一个 id 调本 action 做认领，所以这里必须比 id、
+      // 不能无条件清。
+      const previousId = draft.activeSessionId;
+      if (typeof previousId === 'string' && previousId.length > 0 && previousId !== sessionId) {
+        if (draft.verdicts !== null && typeof draft.verdicts === 'object') delete draft.verdicts.current;
+      }
       draft.activeSessionId = sessionId ?? null;
       if (typeof sessionId !== 'string' || sessionId.length === 0) return;
       // 兜底：迁移之后这里应当总是对象，但 store 的快照可能来自任何路径
@@ -669,6 +679,12 @@ function migrateState(raw, now) {
       };
     }
   }
+
+  // 'current' 是「本次运行」的临时评价，语义上等同于 ui 里的瞬态字段 ——
+  // 跨刷新/跨会话恢复它会让新会话凭空显示上一次的评价（实测复现：
+  // 会话 A 评了「没达到」，新会话记录卡照样显示「没达到」）。
+  // 它只在页面生命周期内有意义，所以加载时一律丢弃，由用户在新的运行里重新评。
+  delete merged.verdicts.current;
 
   merged.modelNotes = {};
   if (raw.modelNotes !== null && typeof raw.modelNotes === 'object' && !Array.isArray(raw.modelNotes)) {

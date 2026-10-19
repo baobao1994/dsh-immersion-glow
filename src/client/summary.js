@@ -183,6 +183,24 @@ function Summary(props) {
             ),
           )
         : null,
+
+      // 清除这个模型的全部备注。
+      //
+      // 这个入口不只是「方便」：modelNotes 是**按模型 key 无限增长**的持久化表
+      // （键数量没有上限，单个模型下最多 200 条），而 clearModelNotes 在此之前
+      // 是唯一定义了却没有任何调用点的 action —— 也就是说这张表只进不出，
+      // 会一直吃 localStorage 配额。接线它既是补上缺失的功能，也是止住泄漏。
+      notes.length > 0
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'ig-summary-clear',
+              onClick: () => handlers.clearModelNotes(entry.key),
+            },
+            t('summary.clearNotes', { n: notes.length }),
+          )
+        : null,
     );
   };
 

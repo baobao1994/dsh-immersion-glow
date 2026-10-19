@@ -48,6 +48,34 @@
 const EDGE_GAP = 20;
 
 /**
+ * 测量防抖时长（ms）。
+ *
+ * 头部高度是低频信息，200ms 的延迟完全够用；换来的是把最坏情况从
+ * 「每帧测一次」降到「每秒最多 5 次」。见 installSafeTop 的 schedule。
+ */
+const MEASURE_DEBOUNCE_MS = 200;
+
+/**
+ * 在外壳里找到「观察哪个节点最省」。
+ *
+ * 优先 `[data-shell-overlay]` 的父节点 —— 那是 frame 本体，它的直接子节点变化
+ * 才意味着外壳结构调整。找不到就返回 null 让调用方退回 body。
+ *
+ * @param root - 搜索起点。
+ * @returns 元素或 null。
+ */
+function findShellRoot(root) {
+  try {
+    if (typeof root.querySelector !== 'function') return null;
+    const overlay = root.querySelector('[data-shell-overlay]');
+    const parent = overlay === null || overlay === undefined ? null : overlay.parentElement;
+    return parent === undefined ? null : parent;
+  } catch (_error) {
+    return null;
+  }
+}
+
+/**
  * 无候选时的兜底偏移（px）。
  *
  * 按「顶部块约 76px + 一点留白」估。同样遵循「越大越靠下」。
@@ -136,13 +164,28 @@ function installSafeTop(doc) {
   if (root === null || root === undefined) return () => {};
 
   let frame = 0;
+  let timer = 0;
   let last = -1;
+  /** 连续测到同一个值的次数，用于「稳定后停止观察」。 */
+  let stableCount = 0;
+  /** 已停止观察（外壳高度稳定了，再测只是白烧 CPU）。 */
+  let stopped = false;
 
   /** 测量并在变化时写入变量。 */
   const apply = () => {
     const value = measureSafeTop(root, doc);
-    if (value === last) return;
+    if (value === last) {
+      stableCount += 1;
+      // 连续 3 次同值就认为外壳高度已定：断开观察，避免长会话里每帧都被
+      // 聊天区的 DOM 变动唤醒。resize 监听仍然保留 —— 窗口尺寸变了要重测。
+      if (stableCount >= 3 && stopped === false) {
+        stopped = true;
+        if (observer !== null) observer.disconnect();
+      }
+      return;
+    }
     last = value;
+    stableCount = 0;
     // 写到 :root 上，HUD 读 var(--ig-safe-top)。用 CSS 变量而不是直接改元素
     // 的 style，是因为 HUD 可能还没挂载（发起询问之前不显示）。
     const target = doc.documentElement;
@@ -151,36 +194,60 @@ function installSafeTop(doc) {
     }
   };
 
-  /** 合并到下一帧执行，避免连续事件把测量打爆。 */
+  /**
+   * 延迟测量：**防抖**而不是合帧。
+   *
+   * 为什么从 rAF 改成防抖：测量要对最多 400 个元素调 getBoundingClientRect，
+   * 是强制同步布局。原先用 rAF 合帧，意思是「每帧最多测一次」—— 但会话活跃时
+   * 聊天区几乎每帧都在增删节点，于是**每帧都会真的测一次**，持续触发重排。
+   *
+   * 头部高度是低频信息（只在宿主外壳挂载、切换标签页时变），200ms 的延迟完全
+   * 够用，而把最坏情况从 60 次/秒降到 5 次/秒。
+   */
   const schedule = () => {
-    if (frame !== 0) return;
-    const raf = view !== null && typeof view.requestAnimationFrame === 'function'
-      ? view.requestAnimationFrame.bind(view)
-      : (fn) => setTimeout(fn, 16);
-    frame = raf(() => {
-      frame = 0;
+    if (stopped === true) return;
+    if (timer !== 0) return;
+    const setT = view !== null && typeof view.setTimeout === 'function' ? view.setTimeout.bind(view) : setTimeout;
+    timer = setT(() => {
+      timer = 0;
       apply();
-    });
+    }, MEASURE_DEBOUNCE_MS);
   };
 
   apply();
   if (view !== null) view.addEventListener('resize', schedule);
 
   // 宿主是异步渲染外壳的，DOM 结构变化后重测。
+  //
+  // ⚠ 观察范围：优先挂在**外壳容器**上，而不是 document.body。body 上的
+  // subtree 观察会把聊天区每一次消息渲染都算进来（即使有防抖，唤醒频率也白高）。
+  // 找不到外壳容器时才退回 body。
   const observer =
     view !== null && typeof view.MutationObserver === 'function'
       ? new view.MutationObserver(schedule)
       : null;
-  if (observer !== null && typeof root === 'object') {
-    observer.observe(root, { childList: true, subtree: true });
+  const observed = findShellRoot(root) ?? root;
+  if (observer !== null && typeof observed === 'object' && observed !== null) {
+    // 不用 subtree：只关心外壳容器的**直接子节点**增删（外壳挂载/替换）。
+    // 外壳内部再怎么渲染都不影响外层高度。
+    observer.observe(observed, { childList: true, subtree: false });
   }
 
   return () => {
     if (frame !== 0 && view !== null && typeof view.cancelAnimationFrame === 'function') {
       view.cancelAnimationFrame(frame);
     }
+    if (timer !== 0 && view !== null && typeof view.clearTimeout === 'function') {
+      view.clearTimeout(timer);
+    }
     frame = 0;
+    timer = 0;
     if (view !== null) view.removeEventListener('resize', schedule);
     if (observer !== null) observer.disconnect();
+    // 顺手摘掉自己写的变量：插件卸载后不该在 :root 上留残留。
+    const target = doc.documentElement;
+    if (target !== null && target !== undefined && typeof target.style?.removeProperty === 'function') {
+      target.style.removeProperty('--ig-safe-top');
+    }
   };
 }

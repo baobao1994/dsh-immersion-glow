@@ -68,7 +68,9 @@ function RecordCard(props) {
   // 「记一条模型备注」的展开态按模型 key 存：多模型时不至于只剩一个能展开。
   const [noteOpen, setNoteOpen] = React.useState(null);
   const [noteDraft, setNoteDraft] = React.useState('');
-  const [verdictDraft, setVerdictDraft] = React.useState('');
+
+  // 指向目的备注文本域的 DOM 节点：点档位按钮时要读它的当前值（非受控）。
+  const verdictFieldRef = React.useRef(null);
 
   /** 播放退场动画后再真正卸载。 */
   const close = React.useCallback(() => {
@@ -79,6 +81,30 @@ function RecordCard(props) {
     }, CLOSE_ANIMATION_MS);
     return () => window.clearTimeout(timer);
   }, [handlers]);
+
+  /**
+   * 把目的备注落盘。
+   *
+   * ⚠ 这是 P0 修复的核心。原先备注**只在点档位按钮时**才提交，而文本域又是
+   * 「选了档才出现」—— 自然顺序（先选档 → 再写备注）下备注必然丢失；想补存
+   * 得点另一个档位，点同一个反而把整条评价清空（实测复现）。
+   *
+   * 设计取舍：文本域是**非受控**的（`defaultValue` + `key`），提交时从事件里读
+   * 文本。这样：
+   *   - 不需要本地草稿 state，也就没有「草稿没初始化 → 失焦把原备注冲成空」
+   *     这类风险（我第一版用受控 state 就踩了这个坑）；
+   *   - `key` 绑定记录 id，切换回看的记录时自动重挂载并回显该条备注；
+   *   - 提交是**幂等**的（值没变不写 store），可放心重复调用。
+   */
+  const commitVerdictNote = (text) => {
+    const key = typeof focusedId === 'string' && focusedId.length > 0 ? focusedId : 'current';
+    const current = verdict[key] ?? null;
+    // 还没选档就没有可挂靠的评价 —— 留白是正确行为，不凭空造一条。
+    if (current === null) return;
+    const next = typeof text === 'string' ? text.slice(0, NOTE_MAX) : '';
+    if (next === (typeof current.note === 'string' ? current.note : '')) return;
+    handlers.setVerdict({ recordId: key, verdict: current.verdict, note: next });
+  };
 
   React.useEffect(() => {
     if (!cardOpen) {
@@ -92,6 +118,8 @@ function RecordCard(props) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [cardOpen, close]);
+
+
 
   if (!cardOpen) return null;
 
@@ -168,12 +196,9 @@ function RecordCard(props) {
       h(
         'div',
         { class: 'ig-model-sub' },
-        [
-          t('card.turns') + ' ' + (Number.isFinite(entry.turns) ? entry.turns : 0),
-          entry.cancelledMs > 0 ? t('card.cancelled', { duration: formatElapsed(entry.cancelledMs, t) }) : null,
-        ]
-          .filter((piece) => piece !== null && String(piece).length > 0)
-          .join(' · '),
+        // 只拼模型条目 schema 里真实存在的字段；`cancelledMs` 无生产者，已删
+        // （理由见 hud.js 同名处的注释）。
+        t('card.turns') + ' ' + (Number.isFinite(entry.turns) ? entry.turns : 0),
       ),
 
       // 已有备注：显示最近一条，不藏起来。
@@ -299,7 +324,13 @@ function RecordCard(props) {
             handlers.clearVerdict(recordKey);
             return;
           }
-          handlers.setVerdict({ recordId: recordKey, verdict: value, note: verdictDraft.slice(0, NOTE_MAX) });
+          // 从文本域当前值取备注（非受控）。可能还是 null（用它自己的 onKeyDown
+          // 提交），所以只在有值时带上。
+          handlers.setVerdict({
+            recordId: recordKey,
+            verdict: value,
+            note: verdictFieldRef.current === null ? '' : String(verdictFieldRef.current.value ?? ''),
+          });
         },
       },
       t(`card.verdict.${value}`),
@@ -392,13 +423,22 @@ function RecordCard(props) {
         h('h3', { className: 'ig-block-title' }, t('card.verdict.title')),
         h('p', { className: 'ig-note' }, t('card.verdict.hint')),
         h('div', { className: 'ig-verdict' }, verdictButtons),
-        currentVerdict !== null || verdictDraft.length > 0
+        currentVerdict !== null
           ? h('textarea', {
               class: 'ig-textarea',
               rows: 2,
+              // key 绑定记录：切换回看的收藏时重挂载，defaultValue 随之回显该条备注。
+              key: `verdict-note-${recordKey}`,
+              ref: verdictFieldRef,
+              defaultValue: typeof currentVerdict.note === 'string' ? currentVerdict.note : '',
               placeholder: t('card.verdict.placeholder'),
-              value: verdictDraft,
-              onChange: (event) => setVerdictDraft(event.target.value),
+              // 失焦提交覆盖「点按钮离开」；Escape 提交覆盖「按 Esc 关闭面板」——
+              // 后者不会触发 blur，不处理就会丢字。
+              onBlur: (event) => commitVerdictNote(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key !== 'Escape') return;
+                commitVerdictNote(event.target.value);
+              },
             })
           : null,
       ),

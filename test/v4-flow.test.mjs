@@ -930,6 +930,45 @@ test('三个面板的退出按钮都是「返回」（带箭头），不再是 �
   void env;
 });
 
+/**
+ * 直接调用 state.js 的 migrateState。
+ *
+ * bundle 不导出它（插件只导出 apply），所以这里按与 state.test.mjs 相同的方式
+ * 在沙箱里求值源文件 —— 测的是真函数，不是复制品。
+ */
+function runMigrate(raw, now) {
+  if (loadMigrate.migrate === undefined) {
+    // 按依赖顺序拼接：migrateState 会调 modelEntriesFromArray（model-log.js），
+    // 而 model-log 又用到 timing 的阈值函数。少一个就会在运行时 ReferenceError。
+    const sources = ['timing.js', 'session-log.js', 'model-log.js', 'state.js']
+      .map((name) => readFileSync(join(ROOT, 'src', 'client', name), 'utf8'))
+      .join('\n');
+    const sandbox = { console, Date, Math, Number, Object, Array, JSON, Set, Map, String, RegExp };
+    const context = createContext(sandbox);
+    runInContext(`${sources}\n;globalThis.__migrate = migrateState;`, context);
+    loadMigrate.migrate = runInContext('globalThis.__migrate', context);
+  }
+  return loadMigrate.migrate(raw, now);
+}
+const loadMigrate = {};
+
+/** 收集所有带指定 class 的节点（findByClass 只返回第一个）。 */
+function findAllByClass(node, className, out = [], depth = 0) {
+  if (node === null || node === undefined || depth > 12) return out;
+  if (Array.isArray(node)) {
+    for (const child of node) findAllByClass(child, className, out, depth + 1);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  if (typeof node.type === 'function' && node.props !== undefined) {
+    return findAllByClass(node.type(node.props), className, out, depth + 1);
+  }
+  const classes = String((node.props ?? {}).class ?? (node.props ?? {}).className ?? '');
+  if (classes.split(/\s+/).includes(className)) out.push(node);
+  findAllByClass(node.children, className, out, depth + 1);
+  return out;
+}
+
 /** 渲染图层并返回元素树。 */
 function render(env) {
   return env.layer.component({
@@ -939,3 +978,276 @@ function render(env) {
     immersionGlowActions: env.actions,
   });
 }
+
+// ── P0-2：目的备注必须存得下去（v13 修的真 bug）──────────────────────
+//
+// 原先备注只在点档位按钮时提交，而文本域又是「选了档才出现」—— 自然顺序
+// （先选档 → 再写备注）下备注必然丢失；点同一个档位反而清空整条评价。
+//
+// 文本域是**非受控**的（defaultValue + key），所以断言看 props.defaultValue
+// 与事件回调，不看 value。
+
+/** 找到目的备注的文本域。 */
+function verdictTextarea(tree) {
+  return findByClass(tree, 'ig-textarea');
+}
+
+test('先选档再填备注：失焦后备注能存下去', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  const handlers = buildHandlers(env);
+
+  handlers.setVerdict({ recordId: 'current', verdict: 'yes', note: '' });
+  assert.equal(env.instance.getSnapshot().verdicts.current.note, '');
+
+  const area = verdictTextarea(render(env));
+  assert.ok(area !== null, '选完档应出现备注文本域');
+
+  // 用户输入后失焦 —— 这是修复的核心路径。
+  area.props.onBlur({ target: { value: '返工了两轮' } });
+  assert.equal(
+    env.instance.getSnapshot().verdicts.current.note,
+    '返工了两轮',
+    '失焦时必须把备注存下去，而不是留在组件本地',
+  );
+});
+
+test('备注没改动时失焦不产生多余的 store 写入', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  buildHandlers(env).setVerdict({ recordId: 'current', verdict: 'yes', note: '原备注' });
+
+  const area = verdictTextarea(render(env));
+  assert.equal(typeof area.props.onBlur, 'function', '文本域必须有失焦提交');
+  const before = env.instance.getSnapshot().verdicts.current;
+  area.props.onBlur({ target: { value: '原备注' } });
+  assert.equal(env.instance.getSnapshot().verdicts.current, before, '值未变不应重写');
+});
+
+test('回看已有备注的收藏：不输入直接失焦，不能把原备注清空', () => {
+  const env = bootedWithData();
+  env.actions.saveRecord({
+    id: 'r1', createdAt: 1000, activeMs: 120000, activeRuns: 1, turns: 2, toolCalls: 0, taskName: '旧任务',
+  });
+  env.actions.setVerdict({ recordId: 'r1', verdict: 'partial', note: '当时返工了两次' });
+  env.actions.setFocusedRecord('r1');
+  env.actions.setCardOpen(true);
+
+  const area = verdictTextarea(render(env));
+  assert.ok(area !== null, '回看时应显示目的确认区');
+  assert.equal(typeof area.props.onBlur, 'function', '文本域必须有失焦提交');
+  assert.equal(area.props.defaultValue, '当时返工了两次', '文本域必须回显已存备注');
+
+  // 用户没改任何东西就离开了
+  area.props.onBlur({ target: { value: '当时返工了两次' } });
+  assert.equal(
+    env.instance.getSnapshot().verdicts.r1.note,
+    '当时返工了两次',
+    '不能因为草稿没初始化就把原备注冲成空串',
+  );
+});
+
+test('按 Esc 关闭时也提交备注（blur 不会触发那条路）', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  buildHandlers(env).setVerdict({ recordId: 'current', verdict: 'yes', note: '' });
+
+  const area = verdictTextarea(render(env));
+  assert.equal(typeof area.props.onKeyDown, 'function', '文本域必须有按键处理');
+  area.props.onKeyDown({ key: 'Escape', target: { value: 'Esc 之前打的字' } });
+  assert.equal(env.instance.getSnapshot().verdicts.current.note, 'Esc 之前打的字');
+});
+
+test('非 Escape 按键不触发提交（不能每敲一个字就写盘）', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  buildHandlers(env).setVerdict({ recordId: 'current', verdict: 'yes', note: '' });
+
+  const area = verdictTextarea(render(env));
+  assert.equal(typeof area.props.onKeyDown, 'function', '文本域必须有按键处理');
+  const before = env.instance.getSnapshot().verdicts.current;
+  area.props.onKeyDown({ key: 'a', target: { value: 'a' } });
+  assert.equal(env.instance.getSnapshot().verdicts.current, before, '普通按键不该写 store');
+});
+
+test('还没选档时失焦不会凭空造出一条评价', () => {
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  assert.equal(verdictTextarea(render(env)), null, '没选档就不该有文本域');
+  assert.deepEqual(Object.keys(env.instance.getSnapshot().verdicts), []);
+});
+
+test('文本域回显：切换回看的记录时跟着换', () => {
+  const env = bootedWithData();
+  env.actions.saveRecord({ id: 'r1', createdAt: 1, activeMs: 60000, activeRuns: 1, turns: 1, toolCalls: 0 });
+  env.actions.saveRecord({ id: 'r2', createdAt: 2, activeMs: 60000, activeRuns: 1, turns: 1, toolCalls: 0 });
+  env.actions.setVerdict({ recordId: 'r1', verdict: 'yes', note: '第一条' });
+  env.actions.setVerdict({ recordId: 'r2', verdict: 'no', note: '第二条' });
+  env.actions.setCardOpen(true);
+
+  env.actions.setFocusedRecord('r1');
+  const first = verdictTextarea(render(env));
+  assert.equal(first.props.defaultValue, '第一条');
+  env.actions.setFocusedRecord('r2');
+  const second = verdictTextarea(render(env));
+  assert.equal(second.props.defaultValue, '第二条');
+  // key 必须跟着记录变，否则 React 复用同一个 DOM 节点、defaultValue 不会生效。
+  assert.notEqual(first.props.key, second.props.key, 'key 必须绑定记录 id 才能重挂载');
+});
+
+// ── P0-3：'current' 评价不能跨会话/跨刷新泄漏（v13 修的真 bug）────────
+//
+// 'current' 表示「正在看的这一次运行」，却被当成普通 recordId 持久化了。
+// 结果：会话 A 评了「没达到」，重启后新会话的记录卡照样显示「没达到」，
+// 用户以为自己没评过。
+
+test('持久化恢复时丢弃 current 评价（不跨会话泄漏）', () => {
+  const env = bootedWithData();
+  env.actions.setVerdict({ recordId: 'current', verdict: 'no', note: '完全跑偏' });
+  assert.ok(env.instance.getSnapshot().verdicts.current !== undefined, '前置：内存里确实有');
+
+  // 模拟「重新打开 DSH」：把当前 state 落盘再走一遍迁移。
+  const persisted = JSON.parse(JSON.stringify(env.instance.getSnapshot()));
+  const migrated = runMigrate(persisted, Date.now());
+  assert.equal(migrated.verdicts.current, undefined, '加载时必须丢掉 current');
+});
+
+test('真实收藏的评价不受影响（只丢 current，不误伤别的）', () => {
+  const env = bootedWithData();
+  env.actions.saveRecord({ id: 'r1', createdAt: 1, activeMs: 60000, activeRuns: 1, turns: 1, toolCalls: 0 });
+  env.actions.setVerdict({ recordId: 'r1', verdict: 'yes', note: '这条要留住' });
+  env.actions.setVerdict({ recordId: 'current', verdict: 'no', note: '这条要丢' });
+
+  const migrated = runMigrate(JSON.parse(JSON.stringify(env.instance.getSnapshot())), Date.now());
+  assert.equal(migrated.verdicts.r1.note, '这条要留住', '真实收藏的评价必须保留');
+  assert.equal(migrated.verdicts.current, undefined, 'current 必须丢弃');
+});
+
+test('切到别的会话时清掉 current 评价', () => {
+  const env = bootedWithData();
+  env.actions.switchSession({ sessionId: 's1', now: 1000 });
+  env.actions.setVerdict({ recordId: 'current', verdict: 'yes', note: '会话 s1 的评价' });
+  assert.ok(env.instance.getSnapshot().verdicts.current !== undefined);
+
+  env.actions.switchSession({ sessionId: 's2', now: 2000 });
+  assert.equal(
+    env.instance.getSnapshot().verdicts.current,
+    undefined,
+    '换会话后 current 不再属于当前语境，必须清掉',
+  );
+});
+
+test('同一会话重复认领（探针每次渲染都调）不会清掉评价', () => {
+  const env = bootedWithData();
+  env.actions.switchSession({ sessionId: 's1', now: 1000 });
+  env.actions.setVerdict({ recordId: 'current', verdict: 'yes', note: '别清我' });
+
+  // 模拟探针连续多次幂等认领同一个会话。
+  for (let i = 0; i < 5; i += 1) env.actions.switchSession({ sessionId: 's1', now: 1000 + i });
+  assert.equal(
+    env.instance.getSnapshot().verdicts.current.note,
+    '别清我',
+    '同 id 的认领不是「换会话」，不能误清',
+  );
+});
+
+test('收藏后 current 迁到真实 id 并被删除', () => {
+  const env = bootedWithData();
+  // 走真实的 saveCurrentRecord：它内部要求活跃 ≥ 5 分钟才值得收藏（toRecord 的门槛）。
+  env.instance.getSnapshot().sessions.s1.segment.activeMs = 10 * 60000;
+  env.actions.setVerdict({ recordId: 'current', verdict: 'partial', note: '基本做完' });
+  buildHandlers(env).saveCurrentRecord();
+
+  const snap = env.instance.getSnapshot();
+  const saved = snap.collections[0];
+  assert.ok(saved !== undefined, '应产生一条收藏');
+  assert.equal(snap.verdicts[saved.id].note, '基本做完', '评价应已迁到收藏 id');
+  assert.equal(snap.verdicts.current, undefined, 'current 必须删掉，否则下次运行带着旧答案');
+});
+
+// ── P1-3：clearModelNotes 必须真的接上线 ─────────────────────────────
+//
+// 它是 modelNotes 唯一的收敛路径，却长期「有定义、有文档、没人调」—— 于是这张
+// 按模型 key 无限增长的持久化表只进不出，持续吃 localStorage 配额。
+
+test('每个有备注的模型都有「清除备注」入口', () => {
+  const env = bootedWithData();
+  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 4, note: '稳', recordId: 'r1' });
+  env.actions.setSummaryOpen(true);
+
+  const tree = render(env);
+  const panel = findByClass(tree, 'ig-panel--wide');
+  assert.ok(panel !== null, '应渲染出汇总面板');
+  const clear = findByClass(panel, 'ig-summary-clear');
+  assert.ok(clear !== null, '有备注的模型必须给一个清除入口，否则表只进不出');
+  assert.equal(typeof clear.props.onClick, 'function', '入口必须可点');
+});
+
+test('点「清除备注」只清掉那个模型，别的模型不受影响', () => {
+  const env = bootedWithData();
+  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 4, note: '稳', recordId: 'r1' });
+  env.actions.addModelNote({ modelKey: 'anthropic/claude-opus', rating: 3, note: '一般', recordId: 'r2' });
+  env.actions.setSummaryOpen(true);
+
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  // 按模型名定位它那一行的清除按钮 —— 排行是按耗时排序的，直接取第一个会
+  // 依赖排序结果，脆且不表达意图。
+  const clear = clearButtonFor(panel, 'deepseek-chat');
+  assert.ok(clear !== null, '应能找到 deepseek-chat 那一行的清除入口');
+  clear.props.onClick();
+
+  const notes = env.instance.getSnapshot().modelNotes;
+  assert.equal(notes['deepseek/deepseek-chat'], undefined, '被点那个模型的备注应清空');
+  assert.ok(notes['anthropic/claude-opus'] !== undefined, '别的模型不受影响');
+});
+
+/** 在汇总面板里找到某个模型那一行的「清除备注」按钮。 */
+function clearButtonFor(panel, modelName) {
+  const rows = findAllByClass(panel, 'ig-summary-row');
+  for (const row of rows) {
+    if (collectText(row).includes(modelName)) return findByClass(row, 'ig-summary-clear');
+  }
+  return null;
+}
+
+test('没有备注的模型不显示清除入口（不给无意义的按钮）', () => {
+  const env = bootedWithData();
+  env.actions.setSummaryOpen(true);
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  assert.ok(panel !== null);
+  assert.equal(findByClass(panel, 'ig-summary-clear'), null, '没备注就没什么可清的');
+});
+
+// ── P1-1：环与副行必须来自同一个数 ───────────────────────────────────
+//
+// 早先 progressLabel 自己又调了一次 ringProgress（相同输入）—— 同一语义算两遍，
+// 分叉时就会出现「环快满了但副行说还有 12 分钟」。v11 的「卡在 1 秒」就是同一
+// 模式（两处实现，一处漏改）。这组断言保证两者始终一致。
+
+test('常态副行说的是「下次提醒还有多久」，且与环同步', () => {
+  const env = bootedWithData();
+  // 设一个能算出确定余量的活跃时长：10 分钟活跃，阈值 5/10/20 → 下一档 20 分，剩 10 分。
+  env.instance.getSnapshot().sessions.s1.segment.activeMs = 10 * 60000;
+  env.actions.updateSettings({ thresholdsMin: [5, 10, 20] });
+
+  const tree = render(env);
+  const hud = findByClass(tree, 'ig-hud');
+  const sub = findByClass(hud, 'ig-hud-sub-line');
+  assert.ok(sub !== null, '常态应有副行');
+  const text = collectText(sub);
+  assert.ok(text.includes('下次提醒还有'), `副行应报下次提醒，实际：${text}`);
+  assert.ok(text.includes('10 分钟'), `剩 10 分钟，实际：${text}`);
+});
+
+test('活跃时长翻倍时副行数字跟着变小（不是写死的）', () => {
+  const env = bootedWithData();
+  env.actions.updateSettings({ thresholdsMin: [5, 10, 20] });
+  const readAt = (minutes) => {
+    env.instance.getSnapshot().sessions.s1.segment.activeMs = minutes * 60000;
+    return collectText(findByClass(findByClass(render(env), 'ig-hud'), 'ig-hud-sub-line'));
+  };
+  const at10 = readAt(10);
+  const at15 = readAt(15);
+  assert.ok(at10.includes('10 分钟'), `10 分活跃 → 剩 10 分，实际 ${at10}`);
+  assert.ok(at15.includes('5 分钟'), `15 分活跃 → 剩 5 分，实际 ${at15}`);
+});
