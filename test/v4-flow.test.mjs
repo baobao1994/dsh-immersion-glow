@@ -259,6 +259,21 @@ test('未发起询问时右上角不出现读数', () => {
   assert.equal(findByClass(tree, 'ig-hud'), null, '发起前不该显示读数');
 });
 
+test('只配置了模型（还没发第一句）也不出现读数', () => {
+  // 真实 DSH 新会话：modelSelection.next 已配置 → currentModel 非空，但没有任何
+  // 请求/统计/模型痕迹。按「还没发起不计时」，右上角不该冒出个 1 秒的假读数。
+  const env = boot({
+    chat: { legacy: { nodes: [], turnTimings: {}, turnEnds: {}, partial: null, runningCalls: [] } },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0 },
+    model: { next: { provider: 'anthropic', model: 'claude-opus' }, lastUsed: null },
+  });
+  env.actions.switchSession({ sessionId: 's1', now: 1000 });
+  env.runProbe('s1');
+  const bucket = env.instance.getSnapshot().sessions.s1;
+  assert.ok(bucket.currentModel !== null, '前置：currentModel 确实被设为配置模型');
+  assert.equal(findByClass(hudElement(env), 'ig-hud'), null, '只配置模型、未发起 → 不显示读数');
+});
+
 test('发起询问后右上角出现读数', () => {
   const env = boot({
     chat: chatSnapshot(),
@@ -270,6 +285,34 @@ test('发起询问后右上角出现读数', () => {
   const tree = hudElement(env);
   const hud = findByClass(tree, 'ig-hud');
   assert.ok(hud !== null, '发起后应显示收拢态读数');
+});
+
+test('圆环中心跟着会话已用时长(activeMs)走，而不是模型耗时', () => {
+  // 用户反馈：中心数字之前显示 modelMs，只在模型调用时跳一下，「计时没在走」。
+  // 现在改为显示 activeMs（会话已用时长），随 tick 每秒 +1。
+  const env = boot({
+    chat: chatSnapshot(),
+    trajectory: trajectorySnapshot(),
+    stats: { turns: 1, steps: 2, llmMs: 6000, toolMs: 0 },
+    model: { next: { provider: 'anthropic', model: 'claude-opus' }, lastUsed: null },
+  });
+  env.runProbe('s1');
+  const ringText = () => {
+    const t = hudElement(env);
+    const ring = findByClass(findByClass(t, 'ig-hud'), 'ig-ring-text');
+    return collectText(ring);
+  };
+
+  // 初始 activeMs≈0 → 中心显示 0s（不是旧的 0 也被抬成 1 秒）。
+  assert.equal(ringText(), '0s', '空态中心显示 0s');
+
+  // 把 activeMs 推进到 5 秒，中心应跟着变 5s —— 证明读数由 activeMs 驱动。
+  env.actions.writeSession({
+    sessionId: 's1',
+    now: Date.now(),
+    segment: { startedAt: 900, lastActiveAt: Date.now(), activeMs: 5000, activeRuns: 1, firedCount: 0 },
+  });
+  assert.equal(ringText(), '5s', 'activeMs 增加后中心读数跟着走');
 });
 
 test('阈值为空时读数不出现', () => {
@@ -742,7 +785,7 @@ test('收拢态两行分工：第一行是主体+总耗时，第二行解释那�
   assert.ok(line !== null, '应有两行结构里的第一行');
   assert.ok(sub !== null, '应有两行结构里的第二行');
   // 第二行必须解释中心那个没有单位的数字。
-  assert.ok(collectText(sub).includes('模型耗时'), '副行应说明这个数是什么');
+  assert.ok(collectText(sub).includes('已用时长'), '副行应说明这个数是会话已用时长');
 });
 
 test('提醒态下副行换成倒计时（第一行仍是总耗时）', () => {

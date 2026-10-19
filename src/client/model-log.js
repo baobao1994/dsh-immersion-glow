@@ -346,7 +346,11 @@ function modelEntriesFromArray(raw) {
  */
 function isTaskStarted(bucket) {
   if (bucket === null || bucket === undefined || typeof bucket !== 'object') return false;
-  if (bucket.currentModel !== null && bucket.currentModel !== undefined) return true;
+  // ⚠ 「发起过」只看**真实产生痕迹**，不看配置：currentModel 是 modelSelection 的
+  // next（下一次请求将使用的模型），在**空白的新会话里也是非空的** —— 拿它当
+  // 已发起，右上角就会在用户还没发第一句时就冒出来，还带出 1 秒的假耗时
+  // （用户反馈：新开会话就显示读数）。真正「发起过」的标志是模型真用过
+  // （models 有耗时/次数）或有统计（轮次 / 步骤 / 模型耗时）。
   if (Array.isArray(bucket.models) && bucket.models.length > 0) return true;
   const stats = bucket.stats;
   if (stats !== null && typeof stats === 'object') {
@@ -418,9 +422,10 @@ function ringProgress(params) {
     : null;
   if (list === null) return { ratio: 0, nextAtMs: 0, crossed: false };
 
-  // 本次任务的模型耗时可能远大于活跃时长（模型思考时用户不操作），但阈值提醒
-  // 计的是「你自己的活跃时间」。两者口径不同，这里用活跃时长对阈值，环形读数
-  // 仍然显示模型耗时 —— 环表示「休息进度」，中心数字表示「模型花了多久」。
+  // 环的进度受阈值档位约束，阈值提醒计的是「你自己的活跃时长」（activeMs）。
+  // 中心读数（在 hud.js 里）也显示 activeMs —— 使圆环/耗时每秒都在走，而不是在
+  // 模型调用之间卡住。模型净耗时仍记在逐模型明细里（ig-hud-list / 展开面板）。
+  // 这里只负责进度档位，与显示口径解耦。
   //
   // ⚠⚠ 档位数必须**不封顶**。
   //

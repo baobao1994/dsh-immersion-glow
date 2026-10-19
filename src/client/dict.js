@@ -34,6 +34,7 @@ const ZH = {
   'hud.bar.aria': '各模型耗时占比',
   'hud.modelTime': '模型耗时',
   'hud.toolTime': '工具耗时',
+  'hud.elapsed': '已用时长',
   'hud.turns': '{n} 轮',
   'hud.steps': '{n} 步',
   'hud.empty': '还没有模型记录。发起一次询问后这里才会有数据。',
@@ -168,6 +169,7 @@ const EN = {
   'hud.bar.aria': 'Share of time by model',
   'hud.modelTime': 'Model time',
   'hud.toolTime': 'Tool time',
+  'hud.elapsed': 'Elapsed',
   'hud.turns': '{n} turns',
   'hud.steps': '{n} steps',
   'hud.empty': 'No model data yet. It appears once you send a request.',
@@ -342,7 +344,10 @@ function languageOf(snapshot) {
  */
 function formatElapsed(ms, t) {
   const value = Math.max(0, Number.isFinite(ms) ? ms : 0);
-  if (value < 60000) return t('unit.secondShort', { n: Math.max(1, Math.round(value / 1000)) });
+  // 秒档用 `Math.round` 后取 max(0,·)：0 就老老实实显示「0 秒」，不该因为
+  // 想避免「亚秒也显示 1」而把真正的空态抬成「1 秒」（用户反馈：新会话空数据
+  // 时读到 1 秒，误导以为已经算了 1 秒）。
+  if (value < 60000) return t('unit.secondShort', { n: Math.max(0, Math.round(value / 1000)) });
   return formatDuration(value, t);
 }
 

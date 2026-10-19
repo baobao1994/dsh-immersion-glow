@@ -197,8 +197,19 @@ test('isTaskStarted：没有任何痕迹时为假', () => {
   assert.equal(isTaskStarted({ models: [], stats: { turns: 0, steps: 0, llmMs: 0 }, currentModel: null }), false);
 });
 
-test('isTaskStarted：任一痕迹为真', () => {
-  assert.equal(isTaskStarted({ currentModel: { provider: 'a', model: 'b' } }), true);
+test('isTaskStarted：仅配置了模型（currentModel）不算已发起', () => {
+  // currentModel 是 modelSelection.next —— 新会话还没发第一句就有值。拿它当
+  // 「已发起」，右上角会在空会话就冒出来（用户反馈）。必须等真有痕迹才算开始。
+  assert.equal(isTaskStarted({ currentModel: { provider: 'a', model: 'b' } }), false);
+  assert.equal(
+    isTaskStarted({ currentModel: { provider: 'a', model: 'b' }, stats: null, models: [] }),
+    false,
+    '只有 currentModel、没有其它痕迹 → 未发起',
+  );
+});
+
+test('isTaskStarted：任一真实痕迹为真', () => {
+  assert.equal(isTaskStarted({ currentModel: { provider: 'a', model: 'b' }, models: [{ key: 'a/b' }] }), true);
   assert.equal(isTaskStarted({ models: [{ key: 'a/b' }] }), true);
   assert.equal(isTaskStarted({ stats: { steps: 1 } }), true);
   assert.equal(isTaskStarted({ stats: { turns: 1 } }), true);
@@ -519,8 +530,10 @@ test('ringProgress：畸形 elapsedMs 按 0 处理', () => {
 test('formatElapsed：不足一分钟给秒', () => {
   const { formatElapsed } = loadModules(['dict.js']);
   const t = (key, params) => `${key}(${JSON.stringify(params ?? {})})`;
-  assert.equal(formatElapsed(0, t), 'unit.secondShort({"n":1})', '0 也给 1 秒，不显示 0');
-  assert.equal(formatElapsed(1, t), 'unit.secondShort({"n":1})');
+  assert.equal(formatElapsed(0, t), 'unit.secondShort({"n":0})', '0 显示 0 秒，不该抬成 1 秒');
+  assert.equal(formatElapsed(499, t), 'unit.secondShort({"n":0})', '亚秒向下取整到 0');
+  assert.equal(formatElapsed(500, t), 'unit.secondShort({"n":1})', '≥0.5 秒进 1');
+  assert.equal(formatElapsed(1, t), 'unit.secondShort({"n":0})', '1ms 显示 0 秒不显示 1');
   assert.equal(formatElapsed(57000, t), 'unit.secondShort({"n":57})');
   assert.equal(formatElapsed(59999, t), 'unit.secondShort({"n":60})', '向上取整到 60');
 });

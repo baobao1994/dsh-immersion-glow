@@ -153,8 +153,10 @@ function CornerMeter(props) {
     ? bucket.segment.activeMs
     : 0;
 
-  // 环表示「离下一次该歇了还有多远」，阈值用的是你自己的活跃时长；
-  // 中心数字表示模型净耗时。两者口径不同是**有意的**，所以不共用一个数。
+  // 环的进度与中心读数都用「活跃时长」（activeMs）：这是本插件要量的沉浸时长，
+  // 发起后会随 tick 每秒走一格 —— 用户看到的圆环/耗时是个会动的秒表，而不是
+  // 只在模型调用时跳一下的模型净耗时（用户反馈：读数卡住、不每秒更新）。
+  // activeMs 的精确口径（空闲冻结 / 模型回答期间豁免）见 timing.tick。
   const progress = ringProgress({
     elapsedMs: activeMs,
     thresholdsMin: snapshot.settings.thresholdsMin,
@@ -211,7 +213,7 @@ function CornerMeter(props) {
       ),
       // 中心读数用 HTML 而非 <text>：SVG 文本的字号/基线在各家 WebView 上
       // 表现不一、居中尤其难控。绝对定位的 span 更稳。
-      h('span', { class: 'ig-ring-text' }, compactElapsed(modelMs, t)),
+      h('span', { class: 'ig-ring-text' }, compactElapsed(activeMs, t)),
     );
 
   // ── 收拢态 ────────────────────────────────────────────────────────
@@ -222,8 +224,8 @@ function CornerMeter(props) {
         type: 'button',
         class: 'ig-hud',
         'aria-expanded': 'false',
-        'aria-label': t('hud.open.aria', { duration: formatElapsed(modelMs, t) }),
-        title: `${modelName} · ${formatElapsed(modelMs, t)}`,
+        'aria-label': t('hud.open.aria', { duration: formatElapsed(activeMs, t) }),
+        title: `${modelName} · ${formatElapsed(activeMs, t)}`,
         // 点开 = 已看。走 handler 而不是 setOpen，否则提醒永远消不掉（v6 的坑）。
         onClick: () => handlers.openMeter(),
       },
@@ -249,7 +251,7 @@ function CornerMeter(props) {
           alert !== null && alert.mode === 'unread'
             ? h('span', { class: 'ig-hud-dot', 'aria-hidden': 'true' })
             : null,
-          h('span', { class: 'ig-hud-time' }, formatElapsed(modelMs, t)),
+          h('span', { class: 'ig-hud-time' }, formatElapsed(activeMs, t)),
         ),
 
         // ── 第二行：副行，只在需要解释第一行时才出现 ─────────────────
@@ -257,7 +259,7 @@ function CornerMeter(props) {
         // 44px 的圆里是个没有单位的数，不解释它就是天书。
         // 提醒态：换成「还有多久收起」——这是提醒态下唯一需要额外说明的事。
         alert === null
-          ? h('span', { class: 'ig-hud-sub-line' }, t('hud.modelTime'), ' · ', progressLabel(t, progress, activeMs))
+          ? h('span', { class: 'ig-hud-sub-line' }, t('hud.elapsed'), ' · ', progressLabel(t, progress, activeMs))
           : alert.mode === 'countdown'
             ? h('span', { class: 'ig-hud-sub-line ig-hud-sub-line--alert' }, t('hud.alert.seconds', { n: alert.secondsLeft }))
             : null,
@@ -319,7 +321,7 @@ function CornerMeter(props) {
         'div',
         { class: 'ig-hud-head-text' },
         h('span', { class: 'ig-hud-title' }, bucket?.taskName ?? t('hud.untitled')),
-        h('span', { class: 'ig-hud-subtitle' }, `${modelName} · ${formatElapsed(modelMs, t)}`),
+        h('span', { class: 'ig-hud-subtitle' }, `${modelName} · ${formatElapsed(activeMs, t)}`),
       ),
       h(
         'button',

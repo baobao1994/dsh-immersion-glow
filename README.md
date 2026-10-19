@@ -37,7 +37,9 @@ nothing shows either; the thresholds you set are the switch.
 
 **A reading, not a decoration.** A small ring just below the title bar (measured, never
 hard-coded, so it never covers the host's buttons): the arc shows how far you are into the next
-rest threshold, the centre shows the model's time, and the label beside it names the current
+rest threshold, the centre shows the session elapsed time (it ticks every second once you
+ start — not the model's inference time, which only moves while a model call is running), and
+ the label beside it names the current
 model. Click it and the detail panel opens — a bar splitting time by model, model time vs.
 tool time, and one line per model carrying the rating and note you gave it last time. It never
 blocks input, never takes focus, never makes a sound.
