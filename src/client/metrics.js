@@ -243,6 +243,54 @@ function deriveMetrics(snapshot, fallbacks) {
 }
 
 /**
+ * 判断「模型此刻是否正在回答」。
+ *
+ * 供计时器使用（见 timing.tick 的 `busy` 语义）：模型生成中或工具调用进行中时，
+ * 这段等待也算沉浸时长，不应因用户不操作而冻结。
+ *
+ * 判据两根（任一成立即视为忙）：
+ *   1. `legacy.partial` 非空 —— 正在流式产出本轮 assistant 消息；
+ *   2. `legacy.runningCalls` 非空数组 —— 有工具调用（含子代理/并行）在跑。
+ *
+ * 取值沿用 deriveMetrics 的兼容策略（legacy 顶层 → chat.legacy → 顶层镜像），
+ * 形状一变只改一处。不抛错：任何字段缺失都当「不在忙」，宁可不计，也不误报。
+ *
+ * @param snapshot - chat 快照或 ConversationSnapshot。
+ * @returns {boolean} 是否正在回答。
+ */
+function isModelBusy(snapshot) {
+  if (snapshot === null || typeof snapshot !== 'object') return false;
+  try {
+    // 直接看 snapshot.legacy，其次 chat.legacy，再次顶层兼容镜像。
+    const legacy =
+      snapshot.legacy !== null && typeof snapshot.legacy === 'object'
+        ? snapshot.legacy
+        : null;
+    const chatLegacy =
+      snapshot.chat !== null && typeof snapshot.chat === 'object' &&
+      snapshot.chat.legacy !== null && typeof snapshot.chat.legacy === 'object'
+        ? snapshot.chat.legacy
+        : null;
+    const topRunning = snapshot.runningCalls;
+
+    const running = [legacy, chatLegacy]
+      .map((block) => (block === null ? undefined : block.runningCalls))
+      .find((value) => Array.isArray(value) && value.length > 0);
+    if (running !== undefined || (Array.isArray(topRunning) && topRunning.length > 0)) {
+      return true;
+    }
+
+    // partial：仍是 in-progress 的 assistant 节点即代表正在生成。
+    for (const block of [legacy, chatLegacy]) {
+      if (block !== null && block.partial !== null && block.partial !== undefined) return true;
+    }
+    return false;
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
  * 判断两份指标是否等价，供 selector 做浅比较以抑制无意义重渲染。
  * @param a - 指标。
  * @param b - 指标。

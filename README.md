@@ -97,7 +97,7 @@ reading that first line, so the promise is now narrower and explicit rather than
 |---|---|---|
 | Enabled | on | Master switch |
 | Thresholds | `20, 40, 60` | Comma separated minutes, strictly increasing, 1–6 entries. **Empty hides the reading entirely.** |
-| Idle freeze | 3 min | Time without input stops the active counter |
+| Idle freeze | 3 min | Time without input stops the active counter; **exempt while the model is answering** |
 | Top-right reading | on | The resident line and its detail panel |
 | — | — | Collection + Summary buttons, "Cued N times · you opened it M times", **Copy stats**, **Clear data** |
 

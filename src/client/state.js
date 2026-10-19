@@ -79,6 +79,15 @@ function emptyBucket(now) {
     models: [],
     taskName: null,
     currentModel: null,
+    /**
+     * 模型此刻是否正在回答（生成中或工具调用进行中）。
+     *
+     * 这不是持久化意义上的状态，而是 root 计时器每秒要读的「实时闸门」：
+     * probe 每次渲染把它泵回 store（见 timing.tick 的 `busy` 语义 —— 回答期间
+     * 即便用户不操作也要继续累加）。存在 store 里是因为 root 侧拿不到 chat 快照，
+     * 只能经探针中转。
+     */
+    busy: false,
     updatedAt: now,
   };
 }
@@ -338,6 +347,11 @@ function createActions() {
       const previousId = draft.activeSessionId;
       if (typeof previousId === 'string' && previousId.length > 0 && previousId !== sessionId) {
         if (draft.verdicts !== null && typeof draft.verdicts === 'object') delete draft.verdicts.current;
+        // 提醒是「上一个会话里刚发生的事」，跟随用户走进新会话只会变成一张
+        // 关不掉的旧倒计时 / 未读徽标（用户反馈：开了新会话倒计时卡住）。
+        // 与 'current' 评价同源同理：瞬态信号只对「正在看的这一次」有意义，
+        // 切会话必须清 —— 不在本次会话语境里的提醒没有资格冒充新提醒。
+        if (draft.ui !== null && draft.ui !== undefined) draft.ui.reminder = null;
       }
       draft.activeSessionId = sessionId ?? null;
       if (typeof sessionId !== 'string' || sessionId.length === 0) return;
@@ -364,7 +378,7 @@ function createActions() {
      *
      * @param draft - immer draft。
      * @param payload - { sessionId, segment?, metrics?, stats?, models?,
-     *   taskName?, now? }
+     *   taskName?, busy?, now? }
      *   各字段 undefined 表示「这次不碰它」，所以探针可以只推变化的部分。
      */
     writeSession(draft, payload) {
@@ -382,6 +396,7 @@ function createActions() {
       if (payload.stats !== undefined) bucket.stats = payload.stats;
       if (payload.models !== undefined) bucket.models = payload.models;
       if (payload.taskName !== undefined) bucket.taskName = payload.taskName;
+      if (payload.busy !== undefined) bucket.busy = payload.busy === true;
       bucket.updatedAt = now;
     },
 
@@ -625,6 +640,10 @@ function migrateState(raw, now) {
                 at: Number.isFinite(bucket.currentModel.at) ? bucket.currentModel.at : now,
               }
             : null,
+        // busy 是「此刻」的实时信号，跨加载一律回 false：旧数据若停在生成中途，
+        // 恢复后不重置会让计时器在没有任何回答在跑时仍然继续累加（探针下一帧
+        // 会把它校正回真实值，但首帧有个可信的空窗）。瞬态，见 emptyBucket。
+        busy: false,
         updatedAt: Number.isFinite(bucket.updatedAt) ? bucket.updatedAt : now,
       };
     }
@@ -644,6 +663,8 @@ function migrateState(raw, now) {
       stats: null,
       models: [],
       taskName: null,
+      currentModel: null,
+      busy: false,
       updatedAt: Number.isFinite(legacySegment.lastActiveAt) ? legacySegment.lastActiveAt : now,
     };
   }

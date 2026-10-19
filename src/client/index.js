@@ -201,6 +201,9 @@ function apply(ctx) {
       idleTimeoutMs: snapshot.settings.idleTimeoutMs,
       resetGapMs: snapshot.settings.resetGapMs,
       thresholdsMin: snapshot.settings.thresholdsMin,
+      // 模型正在回答（生成中 / 工具调用进行中）：这段等待也算沉浸，不停表。
+      // busy 是探针从 chat 快照泵回来的实时闸门（见 metrics.isModelBusy）。
+      busy: bucket.busy === true,
     });
 
     const before = bucket.segment;

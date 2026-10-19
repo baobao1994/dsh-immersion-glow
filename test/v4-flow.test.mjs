@@ -182,6 +182,34 @@ test('探针把任务名与逐模型耗时泵回 store', () => {
   assert.equal(byKey['anthropic/claude-opus'].modelMs, 4000, '9000 - 5000');
 });
 
+test('探针把「模型是否正在回答」泵回 store', () => {
+  // 无 partial、无 runningCalls → 不在忙。
+  const idle = boot({
+    chat: chatSnapshot(), // legacy.partial 未定义、runningCalls 空
+    stats: { turns: 1, steps: 2, llmMs: 6000, toolMs: 0 },
+    model: { next: { provider: 'anthropic', model: 'claude-opus' }, lastUsed: null },
+  });
+  idle.runProbe('s1');
+  assert.equal(idle.instance.getSnapshot().sessions.s1.busy, false, '没有回答在跑应为 not busy');
+
+  // 有 runningCalls → 正在回答。
+  const busy = boot({
+    chat: {
+      legacy: {
+        nodes: [{ kind: 'user', seq: 1 }],
+        turnTimings: {},
+        turnEnds: {},
+        partial: null,
+        runningCalls: [{ callId: 'c1', name: 'task' }],
+      },
+    },
+    stats: { turns: 0, steps: 1, llmMs: 1000, toolMs: 0 },
+    model: { next: { provider: 'deepseek', model: 'deepseek-chat' }, lastUsed: null },
+  });
+  busy.runProbe('s1');
+  assert.equal(busy.instance.getSnapshot().sessions.s1.busy, true, '有工具调用在跑应为 busy');
+});
+
 test('没有轨迹投影时退回当前模型，并标记为近似', () => {
   const env = boot({
     chat: chatSnapshot(),

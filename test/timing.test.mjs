@@ -151,6 +151,105 @@ test('空闲未超阈值时，活动信号不增加 activeRuns', () => {
   assert.equal(next.activeRuns, 0);
 });
 
+// ── 模型回答期间（busy）计时继续 ──────────────────────────────────────
+test('模型回答期间：即使没有用户操作也不冻结，继续累加', () => {
+  const t0 = 1_000_000;
+  const segment = { ...seg(t0), activeMs: 60_000 };
+
+  // 模型从 t0+60s 答到 t0+5min（远超市面上的空闲阈值，但 busy 期间不该冻结）。
+  let result = { segment, effects: { reset: false, saved: null, fire: null } };
+  let lastTick = t0 + 60_000;
+  let elapsed = 0;
+  for (let sec = 61; sec <= 5 * 60; sec += 1) {
+    const now = t0 + sec * 1000;
+    result = TIMING.tick({
+      segment: result.segment,
+      now,
+      lastTickAt: lastTick,
+      visible: true,
+      busy: true,
+      ...DEFAULTS,
+    });
+    lastTick = now;
+    elapsed += 1;
+  }
+  assert.equal(result.effects.reset, false, '回答期间不应触发新时段重置');
+  assert.equal(result.segment.activeMs, 60_000 + elapsed * 1000, '回答期间的每秒钟都应累加');
+});
+
+test('模型回答期间把 lastActiveAt 推到最新，结束时不会立刻被判空闲', () => {
+  const t0 = 1_000_000;
+  let segment = { ...seg(t0), activeMs: 10_000, lastActiveAt: t0 + 10_000 };
+
+  // 模型答到 t0 + 5 分钟，全程 busy。
+  const busyEnd = t0 + 5 * 60_000;
+  let lastTick = t0 + 10_000;
+  for (let sec = 11; sec <= 5 * 60; sec += 1) {
+    const now = t0 + sec * 1000;
+    const result = TIMING.tick({
+      segment,
+      now,
+      lastTickAt: lastTick,
+      visible: true,
+      busy: true,
+      ...DEFAULTS,
+    });
+    segment = result.segment;
+    lastTick = now;
+  }
+  assert.equal(segment.lastActiveAt, busyEnd, 'busy 期间 lastActiveAt 应推进到最新');
+
+  // 回答结束后立刻又 tick 一次：gap 很小，应继续累加而非冻结/重置。
+  const after = TIMING.tick({
+    segment,
+    now: busyEnd + 1000,
+    lastTickAt: busyEnd,
+    visible: true,
+    busy: false,
+    ...DEFAULTS,
+  });
+  assert.equal(after.effects.reset, false, '回答刚结束不该瞬间重置');
+  assert.equal(after.segment.activeMs, segment.activeMs + 1000, '回答结束后仍按活跃续算');
+});
+
+test('模型长时间回答（超 resetGap）不把时段切断', () => {
+  const t0 = 1_000_000;
+  let segment = { ...seg(t0), activeMs: 30_000 };
+  let lastTick = t0;
+  for (let sec = 1; sec <= 12 * 60; sec += 1) {
+    // 12 分钟 > 10 分钟 resetGap，但 busy 全程不回退。
+    const now = t0 + sec * 1000;
+    const result = TIMING.tick({
+      segment,
+      now,
+      lastTickAt: lastTick,
+      visible: true,
+      busy: true,
+      ...DEFAULTS,
+    });
+    assert.equal(result.effects.reset, false, `busy 中第 ${sec}s 不应重置`);
+    segment = result.segment;
+    lastTick = now;
+  }
+  assert.equal(segment.activeMs, 12 * 60_000 + 30_000, '整段回答时间都应计入');
+});
+
+test('busy 期间跨过阈值同样触发提醒', () => {
+  const t0 = 1_000_000;
+  // 从 19 分 59 秒开始，模型一路答到 20 分钟。
+  let segment = { ...seg(t0), activeMs: 19 * 60_000 + 59_000, lastActiveAt: t0 };
+  const result = TIMING.tick({
+    segment,
+    now: t0 + 20 * 60_000,
+    lastTickAt: t0,
+    visible: true,
+    busy: true,
+    ...DEFAULTS,
+  });
+  assert.ok(result.effects.fire !== null, '等待模型回答凑满 20 分钟也应触发提醒');
+  assert.equal(result.effects.fire.count, 1);
+});
+
 // ── 重置 ───────────────────────────────────────────────────────────────
 test('空闲超过 resetGap：开新时段，并把够长的旧段交出来', () => {
   const t0 = 1_000_000;

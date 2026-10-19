@@ -337,3 +337,45 @@ test('deriveMetrics：overrides 垃圾值不抛错，退回快照字段', () => 
   assert.equal(METRICS.deriveMetrics(snapshot, 42).sessionId, 'session-abc');
   assert.equal(METRICS.deriveMetrics(snapshot, 'x').turns, 3);
 });
+
+// ── isModelBusy：模型是否正在回答 ────────────────────────────────────
+test('isModelBusy：runningCalls 非空即视为忙', () => {
+  const snapshot = snapshotOf({
+    nodes: [],
+    turnEnds: new Map(),
+    runningCalls: [{ callId: 'live', name: 'task' }],
+  });
+  assert.equal(METRICS.isModelBusy(snapshot), true);
+});
+
+test('isModelBusy：partial 有正在产出的节点即视为忙', () => {
+  const snapshot = {
+    legacy: { nodes: [], runningCalls: [], partial: { kind: 'assistant', seq: 99 } },
+  };
+  assert.equal(METRICS.isModelBusy(snapshot), true);
+});
+
+test('isModelBusy：双层嵌套的子调用也在忙', () => {
+  const snapshot = {
+    chat: {
+      legacy: {
+        runningCalls: [{ callId: 'outer', subCalls: [{ callId: 'inner' }] }],
+      },
+    },
+  };
+  assert.equal(METRICS.isModelBusy(snapshot), true);
+});
+
+test('isModelBusy：回答结束后不为忙', () => {
+  const idle = snapshotOf({ nodes: [], turnEnds: new Map(), runningCalls: [] });
+  assert.equal(METRICS.isModelBusy(idle), false, '无 partial、无 runningCalls');
+  assert.equal(METRICS.isModelBusy({ legacy: { partial: null, runningCalls: [] } }), false);
+});
+
+test('isModelBusy：缺数据/垃圾输入不抛错，按「不在忙」处理', () => {
+  assert.equal(METRICS.isModelBusy(null), false);
+  assert.equal(METRICS.isModelBusy(undefined), false);
+  assert.equal(METRICS.isModelBusy('x'), false);
+  assert.equal(METRICS.isModelBusy({}), false);
+  assert.doesNotThrow(() => METRICS.isModelBusy({ legacy: null, chat: { legacy: 'bad' } }));
+});

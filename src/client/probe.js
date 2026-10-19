@@ -79,6 +79,10 @@ function SessionProbe(props) {
   const currentModel = normalizeModelSelection(rawModel);
   const tokens = normalizeTokenUsage(rawTokens);
   const taskName = firstTaskName(chatNodesOf(chatSnapshot));
+  // 模型是否正在回答：探针把这个布尔泵回 store，root 侧的计时器据此在回答期间
+  // 继续累加（见 timing.tick 的 `busy`）。chat 缺失时降级为 false ——「不知道
+  // 在不在忙」按不忙处理，比凭空把计时停/冲一两秒更稳。
+  const modelBusy = isModelBusy(chatSnapshot);
 
   // ── 逐模型耗时 ────────────────────────────────────────────────────
   // 从 chat 快照的 assistant 节点推导（每个节点一次模型调用，带 timing）。
@@ -129,7 +133,8 @@ function SessionProbe(props) {
       last.modelsKey === modelsKey &&
       last.exact === modelsExact &&
       last.nameKey === nameKey &&
-      last.modelKey === modelKey
+      last.modelKey === modelKey &&
+      last.busy === modelBusy
     ) {
       return;
     }
@@ -141,6 +146,7 @@ function SessionProbe(props) {
       exact: modelsExact,
       nameKey,
       modelKey,
+      busy: modelBusy,
     };
 
     const payload = { sessionId: id, now: Date.now() };
@@ -150,8 +156,10 @@ function SessionProbe(props) {
     // models 每次都写：它由 assistant 节点推导，随消息推进而变；没有它就没法
     // 回答「这个模型花了多久」。空数组也要写，否则首次渲染的空会一直停在旧值。
     payload.models = models;
+    // busy 只在真正切换时写一次（上面的 key 已经挡住了未变的情况）。
+    payload.busy = modelBusy;
     actions.writeSession(payload);
-  }, [actions, metrics, stats, tokens, models, modelsExact, currentModel, taskName, sessionId]);
+  }, [actions, metrics, stats, tokens, models, modelsExact, currentModel, taskName, sessionId, modelBusy]);
 
   // 订阅时把「当前在用哪个模型」记进 store：这是记录卡顶部那行模型名的来源。
   // 它与 models 的区别：这里是「此刻」，models 是「累计归属」。

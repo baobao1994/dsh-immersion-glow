@@ -110,10 +110,12 @@ function noteActivity(segment, now, idleTimeoutMs) {
  * @param params.idleTimeoutMs - 空闲阈值。
  * @param params.resetGapMs - 新时段阈值。
  * @param params.thresholdsMin - 阈值分钟数组。
+ * @param params.busy - 模型是否正在回答（生成中或工具调用进行中）。为 true 时
+ *   该段视为「沉浸中」：即便用户没有交互也不冻结、不判重置，并随时间继续累加。
  * @returns {{ segment, effects }} effects 含 reset / saved / fire（null 表示无）。
  */
 function tick(params) {
-  const { segment, now, lastTickAt, visible, idleTimeoutMs, resetGapMs, thresholdsMin } = params;
+  const { segment, now, lastTickAt, visible, idleTimeoutMs, resetGapMs, thresholdsMin, busy = false } = params;
 
   /** 默认无副作用。 */
   const noEffects = { reset: false, saved: null, fire: null };
@@ -130,8 +132,12 @@ function tick(params) {
 
   const gapSinceActive = now - segment.lastActiveAt;
 
+  // 模型正在回答：这段等待也是沉浸，跳过「超时新时段」与「空闲冻结」两条分支。
+  // 长回答（一边跑工具一边等）不应把连续时段打断。busy 期间同样刷新 lastActiveAt，
+  // 让回答结束时 `gap` 从此刻重新起算 —— 用户「刚刚还在忙」，不会立即被判定空闲。
+
   // 间隔过长 → 新时段。先把旧段结算成「可保存候选」，再重置。
-  if (gapSinceActive > resetGapMs) {
+  if (!busy && gapSinceActive > resetGapMs) {
     const saved = segment.activeMs >= MIN_SAVE_MS ? { ...segment } : null;
     return {
       segment: createSegment(now),
@@ -139,8 +145,8 @@ function tick(params) {
     };
   }
 
-  // 空闲但未到重置阈值：冻结累加（不补算空档）。
-  if (gapSinceActive > idleTimeoutMs) {
+  // 空闲但未到重置阈值：冻结累加（不补算空档）。模型在答时不判空闲。
+  if (!busy && gapSinceActive > idleTimeoutMs) {
     return { segment, effects: noEffects };
   }
 
@@ -157,6 +163,9 @@ function tick(params) {
     fire = { atMs: nextThresholdMs(thresholdsMin, satisfied - 1), count: satisfied };
     next.firedCount = satisfied;
   }
+
+  // 回答期间把「最近一次活跃」推进到现在，避免结束时立刻落入空闲/重置判定。
+  if (busy) next.lastActiveAt = now;
 
   return { segment: next, effects: { reset: false, saved: null, fire } };
 }

@@ -487,3 +487,37 @@ test('switchSession：null 只清指针，不建分区', () => {
   assert.equal(draft.activeSessionId, null);
   assert.equal(Object.keys(draft.sessions).length, 0);
 });
+
+test('switchSession：切到不同会话会清掉上一个会话的提醒', () => {
+  const draft = draftOf();
+  const actions = bindActions(draft);
+  actions.switchSession({ sessionId: 'sess-A', now: 1000 });
+  actions.showReminder({ message: '该歇了', sticky: true, now: 2000 });
+  assert.ok(draft.ui.reminder !== null, '前置：会话 A 有一条提醒');
+
+  // 切到新会话：旧提醒不该跟着走进新会话语境（否则变成关不掉的旧倒计时）。
+  actions.switchSession({ sessionId: 'sess-B', now: 3000 });
+  assert.equal(draft.ui.reminder, null, '切会话应清掉旧会话的提醒');
+});
+
+test('switchSession：同一会话幂等认领不清提醒', () => {
+  const draft = draftOf();
+  const actions = bindActions(draft);
+  actions.switchSession({ sessionId: 'sess-A', now: 1000 });
+  actions.showReminder({ message: '该歇了', sticky: true, now: 2000 });
+
+  actions.switchSession({ sessionId: 'sess-A', now: 2005 });
+  assert.ok(draft.ui.reminder !== null, '同 id 认领（探针每帧都做）不该把提醒清掉');
+});
+
+test('emptyBucket 默认 busy=false，writeSession 可写入 busy', () => {
+  const draft = draftOf();
+  const actions = bindActions(draft);
+  actions.switchSession({ sessionId: 's', now: 1 });
+  assert.equal(draft.sessions.s.busy, false, '新分区默认为不在忙');
+
+  actions.writeSession({ sessionId: 's', busy: true, now: 2 });
+  assert.equal(draft.sessions.s.busy, true, 'busy 可写为 true');
+  actions.writeSession({ sessionId: 's', busy: false, now: 3 });
+  assert.equal(draft.sessions.s.busy, false, 'busy 可写回 false');
+});
