@@ -523,9 +523,9 @@ test('记录卡里出现「历史累计」区块', () => {
   assert.ok(labels.includes('累计'), '应出现累计文案');
 });
 
-test('提醒卡点击后展开计时器而不是打开记录卡', () => {
+// v6：提醒不再是独立卡片，而是计时器的一种状态。
+test('提醒让计时器转入警示态，而不是多出一个浮层', () => {
   const env = bootedWithData();
-  // 造一条 sticky 未读提醒。
   env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
 
   const tree = env.layer.component({
@@ -534,14 +534,63 @@ test('提醒卡点击后展开计时器而不是打开记录卡', () => {
     useSessions: () => undefined,
     immersionGlowActions: env.actions,
   });
-  const body = findByClass(tree, 'ig-reminder-body');
-  assert.ok(body !== null, '应有提醒卡');
+  // 旧卡片必须彻底不存在。
+  assert.equal(findByClass(tree, 'ig-reminder'), null, '不应再有独立提醒卡');
+  assert.equal(findByClass(tree, 'ig-reminder-badge'), null, '不应再有未读徽标卡');
+  // 取而代之：计时器圆环转成警示态。
+  assert.ok(findByClass(tree, 'ig-ring--alert') !== null, '圆环应进入提醒态');
+  assert.ok(findByClass(tree, 'ig-hud-countdown') !== null, '应显示倒计时');
+});
 
-  body.props.onClick();
+test('提醒态下点击计时器：清未读 + 展开明细', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const hud = findByClass(tree, 'ig-hud');
+  hud.props.onClick();
+
   const ui = env.instance.getSnapshot().ui;
-  assert.equal(ui.meterOpen, true, '应展开计时器');
+  assert.equal(ui.meterOpen, true, '应展开明细');
   assert.equal(ui.cardOpen, false, '不再直接打开记录卡');
-  assert.equal(ui.reminder, null, '未读应被清除');
+});
+
+test('sticky 提醒超时后进入未读态（持续警示，不消失）', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: 1_000_000 });
+  // 把时间推过 deadlineAt：fake Date 由 boot() 提供，这里直接改 store 的 deadline。
+  const snap = env.instance.getSnapshot();
+  snap.ui.reminder.deadlineAt = 1;
+  env.actions.setMeterOpen(false);
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  assert.ok(findByClass(tree, 'ig-ring--unread') !== null, '未读应让圆环持续警示');
+  assert.ok(findByClass(tree, 'ig-hud-dot') !== null, '未读应有提示点');
+});
+
+test('非 sticky 提醒到点即消失（不留下未读态）', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '已收藏', sticky: false, now: 1_000_000 });
+  const snap = env.instance.getSnapshot();
+  snap.ui.reminder.deadlineAt = 1;
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  assert.equal(findByClass(tree, 'ig-ring--unread'), null, '确认类提醒不该变未读');
+  assert.equal(findByClass(tree, 'ig-ring--alert'), null, '也不该是倒计时态');
 });
 
 test('记录卡里的「本次」标记能区分历史条目', () => {

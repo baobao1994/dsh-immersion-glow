@@ -79,6 +79,13 @@ function apply(ctx) {
     'immersion-glow: styles',
   );
 
+  // ── 顶部安全区：运行时量出导航栏底边，写进 --ig-safe-top ────────────
+  // 计时器用它避开宿主右上角那排按钮。不写死数值的原因见 safe-top.js。
+  ctx.effect(
+    () => installSafeTop(typeof document === 'undefined' ? undefined : document),
+    'immersion-glow: safe top',
+  );
+
   // ── i18n ─────────────────────────────────────────────────────────
   if (locale !== undefined && locale !== null) {
     ctx.effect(

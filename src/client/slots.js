@@ -92,7 +92,6 @@ function registerSlots(params) {
         // 分区随 activeSessionId / sessions 变化，selector 两个都要选到。
         const activeSessionId = useImmersionGlow((value) => value.activeSessionId);
         const sessionsMap = useImmersionGlow((value) => value.sessions);
-        const reminder = useImmersionGlow((value) => value.ui.reminder);
         const summaryOpen = useImmersionGlow((value) => value.ui.summaryOpen);
         // 右上角展开面板要显示「我历来给这个模型评过什么」（v5）。
         const verdicts = useImmersionGlow((value) => value.verdicts ?? {});
@@ -177,15 +176,6 @@ function registerSlots(params) {
             verdicts,
             modelNotes,
           }),
-          reminder !== null && reminder !== undefined
-            ? h(ReminderCard, {
-                key: reminder.seq,
-                React,
-                t,
-                reminder,
-                actions: actionsRef,
-              })
-            : null,
         );
       },
     ),

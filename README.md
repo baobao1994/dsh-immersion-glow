@@ -35,9 +35,10 @@ To remove:
 request. Open a session, browse, think — the corner stays clean. Set the thresholds to empty and
 nothing shows either; the thresholds you set are the switch.
 
-**A reading, not a decoration.** A small ring in the top-right: the arc shows how far you are
-into the next rest threshold, the centre shows the model's time, and the label beside it names the
-current model. Click it and the detail panel opens — a bar splitting time by model, model time vs.
+**A reading, not a decoration.** A small ring just below the title bar (measured, never
+hard-coded, so it never covers the host's buttons): the arc shows how far you are into the next
+rest threshold, the centre shows the model's time, and the label beside it names the current
+model. Click it and the detail panel opens — a bar splitting time by model, model time vs.
 tool time, and one line per model carrying the rating and note you gave it last time. It never
 blocks input, never takes focus, never makes a sound.
 
@@ -45,9 +46,10 @@ blocks input, never takes focus, never makes a sound.
 uses (`step/start` → the message completing), and attributed to the model that produced it. Switch
 models mid-session and the split follows.
 
-**At each threshold, a reminder.** At 20 / 40 / 60 minutes of *active* time a reminder card appears
-with a 60-second countdown. If you don't click it, it shrinks to an unread badge that stays until
-you open it. Clicking either expands the ring — it already holds everything. The run can then be
+**At each threshold, the ring itself speaks up.** At 20 / 40 / 60 minutes of *active* time the ring
+turns amber, a line says so, and a 60-second countdown runs. It is the same component in a
+different state — not a second card appearing. If you miss it, the ring stays amber with an unread
+dot. Clicking it expands — it already holds everything. The run can then be
 kept as a record card, which carries both this run's numbers and your all-time figures.
 
 **Say whether it worked.** The record card asks one question — did it get you there: **yes /

@@ -1,121 +1,59 @@
 /**
- * 右上角提醒卡（ADR-123）。
+ * 阈值提醒（v6 重做：不再是独立卡片，而是计时器的一种状态）。
  *
- * 取代退役的底部光带 + toast：阈值触发时弹出、60 秒倒计时；到点还没点，
- * 阈值提醒（sticky）缩成一条**未读徽标**一直留着，直到用户点击 —— 点击打开
- * 记录卡并清除未读。「已收藏 / 已复制」这类确认走同一张卡但**非粘性**：
- * 到点即消失，也永远不会顶掉一条未读的阈值提醒（守卫在 state.showReminder）。
+ * ## 为什么降级
  *
- * 倒计时是组件本地的 `useState` + `window.setInterval`，**不进 store** ——
- * 每秒 setState 一次会打爆 persist。判断一律用绝对时间戳（deadlineAt），
- * 页面被挂起、断点续跑都不会算错。
+ * v5 之前提醒是右上角独立弹的一张卡，与常驻计时器**同时存在**。用户反馈指出
+ * 那是两个东西争同一个位置：提醒一弹就把计时器挤到旁边（甚至叠上去），
+ * 视觉上像出了两个互不相干的浮层。
  *
- * 测试环境的 fake React 的 useEffect 是 noop，interval 不会真的启动；
- * useState 返回初值本身（不执行惰性初始化函数），所以这里**刻意用急切求值**
- * `useState(Date.now())`，绝不能写 `useState(() => Date.now())`。
+ * 现在提醒是计时器的一种状态：
+ *
+ *   常态    圆环 + 模型名 + 耗时
+ *   提醒态  圆环转警示色 + 冒出一行提示 + 倒计时；点它 = 展开明细
+ *   未读态  圆环持续警示色 + 一个待读点，直到用户点过
+ *
+ * 一个位置、一个组件、一套材质语言。提醒变成「计时器注意到了你」，
+ * 而不是「又来了一张卡」。UI 画在 hud.js —— 只有那里知道圆环长什么样；
+ * 本模块只负责把 store 里的提醒翻译成状态。
  *
  * @module src/client/reminder
  */
 
 /**
- * 渲染提醒（卡片 / 徽标 / 无）。
+ * 把 store 里的提醒翻译成计时器需要的提醒态。
  *
- * 三种形态：
- *   1. 倒计时内        → 右上角卡片：标题 + 正文 + 倒计时 + 关闭按钮；
- *   2. sticky 已超时   → 未读徽标，常驻直到被点；
- *   3. 非 sticky 已超时 → null（卸载，无痕消失）。
- *
- * @param props - { React, t, reminder, actions }
- *   reminder：store 里的 ui.reminder（null 或 { message, sticky, deadlineAt, seq }）。
- *   actions：store 的 actions 表（用 countOpen / openFromReminder / dismissReminder）。
- * @returns 虚拟 DOM 节点，无提醒或已过期时为 null。
+ * @param reminder - store 的 ui.reminder（null 或对象）。
+ * @param nowMs - 当前时间戳。
+ * @returns {null | { mode: 'countdown'|'unread', secondsLeft: number }}
+ *   null = 当前没有提醒，计时器按常态渲染。
  */
-function ReminderCard(props) {
-  const { React, t, reminder, actions } = props;
-  const useState = React.useState;
-  const useEffect = React.useEffect;
+function reminderStateOf(reminder, nowMs) {
+  if (reminder === null || reminder === undefined || typeof reminder !== 'object') return null;
 
-  // 急切求值（见文件头说明）。remind 变化时由调用方的 key=seq 强制重挂，
-  // 状态自然复位，不需要在这里追同步。
-  const [nowMs, setNowMs] = useState(Date.now());
+  const deadlineAt = Number.isFinite(reminder.deadlineAt) ? reminder.deadlineAt : 0;
+  const sticky = reminder.sticky === true;
+  const now = Number.isFinite(nowMs) ? nowMs : 0;
+  const expired = now >= deadlineAt;
 
-  const hasReminder = reminder !== null && reminder !== undefined && typeof reminder === 'object';
-  const deadlineAt = hasReminder && Number.isFinite(reminder.deadlineAt) ? reminder.deadlineAt : 0;
-  const sticky = hasReminder === true && reminder.sticky === true;
-  const expired = nowMs >= deadlineAt;
-
-  useEffect(() => {
-    if (hasReminder !== true || expired === true) return undefined;
-    const timer = window.setInterval(() => {
-      // 只负责让页面「走秒」；过期判定每帧用绝对时间戳算，不靠它累积。
-      setNowMs(Date.now());
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [hasReminder, expired, reminder === null || reminder === undefined ? 0 : reminder.seq]);
-
-  // ── 形态判定 ─────────────────────────────────────────────────────────
-  if (hasReminder !== true) return null;
   if (expired === true) {
-    if (sticky !== true) return null;
-    // 未读徽标：点击 = 清除未读并**展开右上角圆形计时器**（v5）。
-    // 之前是打开记录卡；改成展开计时器是因为提醒说「该看看这次的任务」，
-    // 而计时器就在它旁边、且已经装着全部明细 —— 让用户多开一张卡没有意义。
-    return React.createElement(
-      'button',
-      {
-        class: 'ig-reminder ig-reminder-badge',
-        type: 'button',
-        title: t('reminder.unread'),
-        'aria-label': t('reminder.unread'),
-        onClick: () => {
-          actions.countOpen();
-          actions.openMeter();
-        },
-      },
-      React.createElement('span', { class: 'ig-reminder-badge-dot', 'aria-hidden': 'true' }),
-      t('reminder.unread'),
-    );
+    // 只有 sticky 提醒（阈值提醒）留在未读态；「已收藏」这类确认到点即消失。
+    return sticky === true ? { mode: 'unread', secondsLeft: 0 } : null;
   }
+  // 向上取整，让「60」完整出现一秒，而不是开局就显示 59。
+  return { mode: 'countdown', secondsLeft: Math.max(1, Math.ceil((deadlineAt - now) / 1000)) };
+}
 
-  // 剩余秒数：向上取整，让「60」完整出现一秒，而不是开局就显示 59。
-  const secondsLeft = Math.max(0, Math.ceil((deadlineAt - nowMs) / 1000));
-
-  // ── 倒计时内的卡片 ──────────────────────────────────────────────────
-  return React.createElement(
-    'div',
-    {
-      class: 'ig-reminder',
-      role: 'status',
-      'aria-label': t('reminder.aria'),
-    },
-    React.createElement(
-      'button',
-      {
-        class: 'ig-reminder-body',
-        type: 'button',
-        onClick: () => {
-          actions.countOpen();
-          actions.openMeter();
-        },
-      },
-      React.createElement('span', { class: 'ig-reminder-title' }, t('reminder.title')),
-      React.createElement('span', { class: 'ig-reminder-message' }, reminder.message),
-      React.createElement(
-        'span',
-        { class: 'ig-reminder-countdown' },
-        t('reminder.countdown', { n: secondsLeft }),
-      ),
-    ),
-    React.createElement(
-      'button',
-      {
-        class: 'ig-reminder-close',
-        type: 'button',
-        title: t('reminder.unread'),
-        'aria-label': t('reminder.unread'),
-        onClick: () => actions.dismissReminder(),
-      },
-      '×',
-    ),
-  );
+/**
+ * 倒计时读数。
+ *
+ * 纯函数便于测试；不读 Date.now()，时间由调用方注入。
+ *
+ * @param reminder - store 的 ui.reminder。
+ * @param nowMs - 当前时间戳。
+ * @returns 剩余秒数；无提醒时为 0。
+ */
+function secondsLeftOf(reminder, nowMs) {
+  const state = reminderStateOf(reminder, nowMs);
+  return state === null ? 0 : state.secondsLeft;
 }

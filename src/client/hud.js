@@ -123,8 +123,22 @@ function CornerMeter(props) {
   // 而提醒卡与计时器是两个组件。本地 state 做不到，得靠事件总线 —— 不值得。
   const open = useImmersionGlow((value) => value.ui.meterOpen === true);
   const setOpen = (next) => actions.setMeterOpen(next);
+  const reminder = useImmersionGlow((value) => value.ui.reminder ?? null);
   // 订阅整个快照：门槛判定、阈值、耗时、自评任何一处变化都要立刻反映。
   const snapshot = useImmersionGlow((value) => value);
+
+  // 倒计时驱动（v6）：提醒不再是独立组件，它变成计时器的一种状态。
+  // 所以走秒的 interval 也必须挂在计时器这里 —— 否则收拢态不渲染时倒计时会停。
+  // 刻意用急切求值 `Date.now()` 而不是惰性初始化：测试里的假 React 不会执行
+  // useState 的惰性函数，惰性写法会让 nowMs 永远是初始值。
+  const [tick, setTick] = React.useState(Date.now());
+  React.useEffect(() => {
+    if (reminder === null || reminder === undefined) return undefined;
+    const timer = window.setInterval(() => setTick(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [reminder === null || reminder === undefined ? 0 : (reminder.seq ?? 0)]);
+
+  const alert = reminderStateOf(reminder, tick);
 
   React.useEffect(() => {
     if (snapshot?.settings?.enabled !== true && open === true) actions.setMeterOpen(false);
@@ -155,11 +169,14 @@ function CornerMeter(props) {
   const notesTable = modelNotes ?? {};
   const verdictTable = verdicts ?? {};
 
+  // 提醒态：计时器转警示色。这是「同一个东西在说话」，不是另一个浮层。
+  const alertClass = alert === null ? '' : alert.mode === 'unread' ? ' ig-ring--unread' : ' ig-ring--alert';
+
   // ── 圆环本体（收拢与展开共用）─────────────────────────────────────
   const ring = () =>
     h(
       'span',
-      { class: 'ig-ring' },
+      { class: `ig-ring${alertClass}` },
       h(
         'svg',
         {
@@ -213,8 +230,20 @@ function CornerMeter(props) {
       h(
         'span',
         { class: 'ig-hud-side' },
-        h('span', { class: 'ig-hud-model' }, modelName),
+        // 提醒态把模型名换成提示语：这一刻用户该知道的是「该歇了」，
+        // 不是「你在用 claude-opus」。耗时仍然留着 —— 它是背景信息。
+        alert === null
+          ? h('span', { class: 'ig-hud-model' }, modelName)
+          : h(
+              'span',
+              { class: 'ig-hud-model ig-hud-model--alert' },
+              alert.mode === 'unread' ? t('hud.alert.unread') : t('hud.alert.body'),
+            ),
         h('span', { class: 'ig-hud-time' }, formatElapsed(modelMs, t)),
+        alert !== null && alert.mode === 'countdown'
+          ? h('span', { class: 'ig-hud-countdown' }, t('hud.alert.seconds', { n: alert.secondsLeft }))
+          : null,
+        alert !== null && alert.mode === 'unread' ? h('span', { class: 'ig-hud-dot', 'aria-hidden': 'true' }) : null,
       ),
     );
   }
@@ -289,6 +318,15 @@ function CornerMeter(props) {
         '×',
       ),
     ),
+
+    // 提醒态下，面板顶部也保留一行提示：用户可能是在面板里才看到的提醒。
+    alert !== null
+      ? h(
+          'p',
+          { class: `ig-hud-banner${alert.mode === 'unread' ? ' ig-hud-banner--unread' : ''}` },
+          t(alert.mode === 'unread' ? 'hud.alert.unread' : 'hud.alert.body'),
+        )
+      : null,
 
     // 占比条：一整条按模型分段，长度即占比。
     segments.length > 0

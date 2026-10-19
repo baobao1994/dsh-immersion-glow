@@ -247,116 +247,6 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
 }
 
-/* ── 右上角提醒卡（ADR-123）─────────────────────────────────────── */
-/* 卡片与未读徽标共用 .ig-reminder 定位：挂在宿主 overlay 的右上角。 */
-.ig-reminder {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-width: min(320px, calc(100vw - 48px));
-  padding: 12px 14px;
-  border-radius: var(--dsw-radius-lg, 14px);
-  border: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28));
-  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.12));
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
-  backdrop-filter: blur(18px) saturate(1.4);
-  color: var(--dsw-alias-label-primary, currentColor);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
-  animation: ig-reminder-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-
-@keyframes ig-reminder-in {
-  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.ig-reminder-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  padding: 0;
-  cursor: pointer;
-}
-
-.ig-reminder-title {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 500;
-}
-
-.ig-reminder-message {
-  font-size: 12.5px;
-  line-height: 19px;
-  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
-}
-
-.ig-reminder-countdown {
-  font-size: 11.5px;
-  line-height: 17px;
-  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
-  font-variant-numeric: tabular-nums;
-}
-
-.ig-reminder-close {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
-  cursor: pointer;
-  font: inherit;
-  font-size: 14px;
-  line-height: 18px;
-  padding: 2px 6px;
-  border-radius: var(--dsw-radius-sm, 6px);
-}
-
-.ig-reminder-close:hover {
-  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-}
-
-/* 未读徽标：倒计时结束后 sticky 提醒的常驻形态，点了才消失。 */
-.ig-reminder-badge {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 1));
-  font: inherit;
-  font-size: 12.5px;
-  line-height: 18px;
-  padding: 4px 8px;
-  max-width: none;
-  box-shadow: none;
-  cursor: pointer;
-  border-radius: var(--dsw-radius-full, 999px);
-  animation: none;
-}
-
-.ig-reminder-badge:hover {
-  color: var(--dsw-alias-label-primary, currentColor);
-  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-}
-
-.ig-reminder-badge-dot {
-  inline-size: 6px;
-  block-size: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--dsw-alias-text-brand, #539cfa);
-}
-
 /* ── 右上角圆形计时器（v5）──────────────────────────────────────── */
 /*
  * 收拢态是一个 44px 的圆环 + 一行字。圆环表示「离下一次该歇了还有多远」，
@@ -366,9 +256,16 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
  *
  * 材质与提醒卡同源（blur + 一道极细描边）但弱一档：提醒是事件，读数是常态。
  */
+/*
+ * ⚠ top 用 var(--ig-safe-top) 而**不是写死数值**：窗口右上角那排按钮属于宿主，
+ * 写死偏移必然会在换行 / 窄窗 / 宿主改版时压上去。该变量由 safe-top.js 在
+ * 运行时量出「外壳底边 + 12px」写入（见那个文件的说明）。
+ *
+ * 兜底值写在 calc 里，万一测量失败也还在导航栏之下。
+ */
 .ig-hud {
   position: absolute;
-  top: 16px;
+  top: var(--ig-safe-top, 52px);
   right: 16px;
   pointer-events: auto;
   display: inline-flex;
@@ -448,6 +345,66 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   user-select: none;
 }
 
+/*
+ * 提醒态变体（v6）。
+ *
+ * 不用「换一张卡片」表达提醒，而是让计时器**自己转成警示色**。这样右上角永远
+ * 只有一个浮层，提醒是它的状态而不是它的邻居。
+ *
+ * 倒计时中：警示色 + 轻微呼吸（只在 countdown 态，unread 态不闪 —— 未读已经
+ * 足够引人注意，再闪就是噪音）。
+ */
+.ig-ring--alert .ig-ring-value {
+  stroke: var(--dsw-alias-label-warning, #d9a441);
+  animation: ig-ring-breathe 2.4s ease-in-out infinite;
+}
+
+.ig-ring--unread .ig-ring-value {
+  stroke: var(--dsw-alias-label-warning, #d9a441);
+}
+
+@keyframes ig-ring-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+/* 提醒态的提示语：与平时一样的字重，只是换色 —— 它不该突然变大变重。 */
+.ig-hud-model--alert {
+  color: var(--dsw-alias-label-warning, #d9a441);
+}
+
+.ig-hud-countdown {
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
+/* 未读点：与提醒卡时代的未读点同语言，位置跟着提示语走。 */
+.ig-hud-dot {
+  inline-size: 5px;
+  block-size: 5px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dsw-alias-label-warning, #d9a441);
+  align-self: center;
+}
+
+/* 展开面板顶部的提醒条。 */
+.ig-hud-banner {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-warning, #d9a441);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: var(--dsw-radius-sm, 6px);
+}
+
+.ig-hud-banner--unread {
+  color: var(--dsw-alias-label-warning, #d9a441);
+}
+
 /* 收拢态圆环右侧的两行字：模型名（可省略）+ 精确耗时。 */
 .ig-hud-side {
   display: flex;
@@ -479,7 +436,7 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 /* 展开态：从收拢的那个圆点长出来，视觉上是同一个东西打开了。 */
 .ig-hud-panel {
   position: absolute;
-  top: 16px;
+  top: var(--ig-safe-top, 52px);
   right: 16px;
   pointer-events: auto;
   width: min(340px, calc(100vw - 32px));
@@ -1192,7 +1149,6 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
 
 /* ── 动效偏好 ───────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .ig-reminder,
   .ig-hud,
   .ig-hud-panel,
   .ig-panel,
