@@ -17,39 +17,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { loadModule } from './helpers.mjs';
 
 /** 包根。 */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * 在沙箱中求值一个客户端源码文件，取回它的顶层声明。
- *
- * src/client/*.js 是「为内联构建而写的普通 JS」，没有 export 语句 —— 这样构建
- * 脚本能直接拼接。测试因此用 vm 求值后按名字取函数，源文件不必为了可测性改写。
- *
- * @param name - src/client 下的文件名。
- * @returns 顶层声明表。
- */
-function loadModule(name) {
-  const source = readFileSync(join(ROOT, 'src', 'client', name), 'utf8');
-  const sandbox = { console, Date, Math, Number, Object, Array, JSON, Set, Map, String, RegExp };
-  const context = createContext(sandbox);
-  // 让声明落到全局，之后按名字读回来。
-  runInContext(`${source}\n;globalThis.__names = ${JSON.stringify(
-    [...source.matchAll(/^(?:const|let|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]),
-  )};`, context);
-
-  const names = runInContext('globalThis.__names', context);
-  const exported = {};
-  for (const key of names) {
-    try {
-      exported[key] = runInContext(key, context);
-    } catch (_error) {
-      // 注释里出现的名字取不到，跳过。
-    }
-  }
-  return exported;
-}
 
 const TIMING = loadModule('timing.js');
 

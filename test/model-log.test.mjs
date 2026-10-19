@@ -16,41 +16,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { loadModules } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * 在沙箱中求值若干客户端源码文件（按给定顺序内联，共享一个闭包）。
- *
- * src/client/*.js 是「为内联构建而写的普通 JS」，没有 export —— 与真实的
- * tools/build-client.mjs 完全同构，所以这里能真实测出「跨模块引用」的问题。
- *
- * @param names - src/client 下的文件名，按依赖顺序。
- * @returns 全部顶层声明的合并表。
- */
-function loadModules(names) {
-  const sources = names
-    .map((name) => readFileSync(join(ROOT, 'src', 'client', name), 'utf8'))
-    .join('\n');
-  const declared = [
-    ...sources.matchAll(/^(?:const|let|function)\s+([A-Za-z_$][\w$]*)/gm),
-  ].map((m) => m[1]);
-
-  const sandbox = { console, Date, Math, Number, Object, Array, JSON, Set, Map, String, RegExp };
-  const context = createContext(sandbox);
-  runInContext(`${sources}\n;globalThis.__names = ${JSON.stringify(declared)};`, context);
-  const namesOut = runInContext('globalThis.__names', context);
-
-  const exported = {};
-  for (const key of namesOut) {
-    try {
-      exported[key] = runInContext(key, context);
-    } catch (_error) {
-      // 注释里出现的名字取不到，跳过。
-    }
-  }
-  return exported;
-}
 
 // model-log.js 依赖 tags.js 之外没有别的模块；session-log.js 同理。
 const { deriveModelEntries, modelEntriesFromArray, modelEntriesToArray, mergeModelEntries, isTaskStarted } =

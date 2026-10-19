@@ -220,11 +220,14 @@ function apply(ctx) {
     if (isDifferentLocalDay(snapshot.today.date, now)) actions.rollDay(now);
 
     // 旧时段结束 → 达门槛就入库。
+    //
+    // ⚠ 走与手动收藏**同一个** buildRecord：这条路径以前只带 tags，导致自动入库
+    // 的记录没有任务名/模型明细/统计，且用户的评价会丢。详见 buildRecord 的注释。
     if (result.effects.reset && result.effects.saved !== null) {
-      const saved = result.effects.saved;
-      const record = toRecord(saved, bucket.metrics, now);
+      const record = buildRecord(bucket, result.effects.saved, now, snapshot);
       if (record !== null) {
-        actions.saveRecord({ ...record, tags: tagsOf(saved.startedAt, saved.activeMs) });
+        actions.saveRecord(record);
+        migrateCurrentVerdict(record.id);
       }
     }
 
@@ -324,6 +327,68 @@ function apply(ctx) {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, 'immersion-glow: visibility');
 
+  /**
+   * 造一条收藏记录 —— **两条保存路径唯一的构造器**。
+   *
+   * ## 为什么必须有它
+   *
+   * 这个形状原先在三个地方各写一遍（`toRecord` + 手动保存 + 自动保存），
+   * 而两处调用点写的不一样：
+   *
+   *   - 手动保存（点「收藏」）带了 `id / taskName / models / stats / tags`；
+   *   - **自动保存（时段满 10 分钟间隔自动入库）只带了 `tags`**。
+   *
+   * 于是自动入库的记录长期是残缺的：画廊显示「未命名任务」、没有模型明细、
+   * 工具耗时显示 `—`，而且用户在时段结束前打的评价无法迁过去（会被
+   * switchSession 清掉）—— 四个连带缺陷，全是同一个根因：**同一实体有多个
+   * 生产者，没人负责保持一致**。
+   *
+   * ## 它同时负责把评价迁到新记录上
+   *
+   * 评价存在 `verdicts` 表里、按记录 id 索引。所以任何一条记录被创建时，都要
+   * 把挂在 `'current'`（「正在看的这一次运行」）上的评价搬过去并删掉原键 ——
+   * 否则评价要么丢失，要么留到下一次运行冒充新评价。
+   *
+   * @param bucket - 会话分区（提供 metrics / taskName / models / stats）。
+   * @param segment - 要入库的那个时段。
+   * @param now - 时间戳。
+   * @param snapshot - store 快照（取 collections.length 生成 id、取 verdicts）。
+   * @returns 记录对象；不足入库门槛时返回 null。
+   */
+  function buildRecord(bucket, segment, now, snapshot) {
+    const base = toRecord(segment, bucket.metrics, now);
+    if (base === null) return null;
+
+    // id 在这里生成（而不是让 action 内部生成），因为紧接着的评价迁移要用到它 ——
+    // actions 拿不到返回值。
+    const id = `r${base.createdAt}${snapshot.collections.length}`;
+
+    return {
+      ...base,
+      id,
+      // 任务名与模型明细一起存进收藏，这样画廊/汇总不需要回查会话就能渲染。
+      taskName: typeof bucket.taskName === 'string' && bucket.taskName.length > 0 ? bucket.taskName : null,
+      models: modelEntriesFromArray(bucket.models),
+      stats: bucket.stats ?? null,
+      tags: tagsOf(segment.startedAt, segment.activeMs),
+    };
+  }
+
+  /**
+   * 把 `'current'` 上挂着的评价迁到刚入库的记录上，并删掉原键。
+   *
+   * 两条保存路径都要调 —— 自动入库同样是「那一次运行结束了」，用户之前的评价
+   * 理应跟着那条记录走，而不是被丢掉。
+   *
+   * @param recordId - 刚创建的记录 id。
+   */
+  function migrateCurrentVerdict(recordId) {
+    const current = state().verdicts?.current;
+    if (current === null || current === undefined) return;
+    actions.setVerdict({ recordId, verdict: current.verdict, note: current.note });
+    actions.clearVerdict('current');
+  }
+
   // ── 共用处理函数（供各组件 props 传递） ────────────────────────────
   const handlers = {
     // 三个面板（计时器明细 / 记录卡 / 汇总）**互斥**：同一时刻只开一个，
@@ -409,37 +474,13 @@ function apply(ctx) {
     saveCurrentRecord: () => {
       const snapshot = state();
       const bucket = currentBucket(snapshot);
-      const record = toRecord(bucket.segment, bucket.metrics, Date.now());
       const t = translator();
+      const now = Date.now();
+      // 与自动入库共用同一个构造器，保证两条路径产出形状完全一致。
+      const record = buildRecord(bucket, bucket.segment, now, snapshot);
       if (record === null) return;
-
-      // 分区里已经存着探针推导好的条目，这里只需校验形状。
-      const entries = modelEntriesFromArray(bucket.models ?? []);
-      // 收藏 id 在这里生成（而不是让 action 内部生成），因为紧接着的「把
-      // 当前时段的自评迁到这条收藏」需要用到它。actions 拿不到返回值。
-      const recordId = `r${record.createdAt}${snapshot.collections.length}`;
-      actions.saveRecord({
-        ...record,
-        id: recordId,
-        // 任务名与模型明细一起存进收藏，这样画廊/汇总不需要回查会话就能渲染。
-        taskName: typeof bucket.taskName === 'string' ? bucket.taskName : null,
-        models: entries,
-        stats: bucket.stats ?? null,
-        tags: tagsOf(bucket.segment.startedAt, bucket.segment.activeMs),
-      });
-      // 把当前时段已有的自评迁到这条收藏上，否则「收藏后再评价」会记到
-      // 'current' 这个假 key 上，收藏里看不到。
-      const currentVerdict = snapshot.verdicts?.current;
-      if (currentVerdict !== null && currentVerdict !== undefined) {
-        actions.setVerdict({
-          recordId,
-          verdict: currentVerdict.verdict,
-          note: currentVerdict.note,
-        });
-        // 迁完就删：那条评价现在属于这条收藏了，'current' 继续留着会让
-        // 「下一次运行」一开始就带着上一次的答案。
-        actions.clearVerdict('current');
-      }
+      actions.saveRecord(record);
+      migrateCurrentVerdict(record.id);
       actions.showReminder({ message: t('card.saved') });
     },
 

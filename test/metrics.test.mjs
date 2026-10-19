@@ -13,33 +13,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { loadModule } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * 在沙箱中求值一个客户端源码文件，取回顶层声明。
- * @param name - src/client 下的文件名。
- * @returns 顶层声明表。
- */
-function loadModule(name) {
-  const source = readFileSync(join(ROOT, 'src', 'client', name), 'utf8');
-  const sandbox = { console, Date, Math, Number, Object, Array, JSON, Set, Map, String, RegExp };
-  const context = createContext(sandbox);
-  runInContext(`${source}\n;globalThis.__names = ${JSON.stringify(
-    [...source.matchAll(/^(?:const|let|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]),
-  )};`, context);
-
-  const names = runInContext('globalThis.__names', context);
-  const exported = {};
-  for (const key of names) {
-    try {
-      exported[key] = runInContext(key, context);
-    } catch (_error) {
-      // 注释里的名字跳过。
-    }
-  }
-  return exported;
-}
 
 const METRICS = loadModule('metrics.js');
 const TAGS = loadModule('tags.js');

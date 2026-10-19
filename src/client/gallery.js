@@ -19,6 +19,12 @@ function Gallery(props) {
 
   const open = useImmersionGlow((state) => state.ui.galleryOpen);
   const collections = useImmersionGlow((state) => state.collections);
+  // 达成评价存在 verdicts 表里（按记录 id 索引），**不在**记录对象上。
+  //
+  // ⚠ 早先这里读的是 `item.verdict`，而那个字段从来不存在于任何记录上 ——
+  // 于是下面那段「达到了 / 没达到」标记永远是死代码，连带 panel-css 里三档
+  // 配色也一起是死的。与 cancelledMs 同属「消费者无生产者」。
+  const verdicts = useImmersionGlow((state) => state.verdicts ?? {});
   const [confirmClear, setConfirmClear] = React.useState(false);
 
   // 关闭时清掉确认态，避免下次打开还停在「再点一次」。
@@ -42,7 +48,7 @@ function Gallery(props) {
   const row = (item) => {
     const tags = Array.isArray(item.tags) ? item.tags : tagsOf(item.createdAt, item.activeMs);
     const name = typeof item.taskName === 'string' && item.taskName.length > 0 ? item.taskName : null;
-    const verdict = item.verdict ?? null;
+    const verdict = verdicts[item.id] ?? null;
 
     return h(
       'li',

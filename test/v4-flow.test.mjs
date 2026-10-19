@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { collectText, fakeReact, fakeStoreModule, findAllByClass, findByClass, makeFakeCtx } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 execFileSync(process.execPath, [join(ROOT, 'tools', 'build-client.mjs')], { stdio: 'ignore' });
@@ -27,71 +28,6 @@ execFileSync(process.execPath, [join(ROOT, 'tools', 'build-client.mjs')], { stdi
 const BUNDLE = readFileSync(join(ROOT, 'lib', 'client.js'), 'utf8');
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
-function fakeReact() {
-  const createElement = (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat() });
-  return {
-    createElement,
-    Fragment: Symbol('Fragment'),
-    useState: (value) => [value, () => {}],
-    useEffect: (fn) => {
-      fn();
-    },
-    useCallback: (fn) => fn,
-    useMemo: (fn) => fn(),
-    useRef: (value) => ({ current: value }),
-  };
-}
-
-/** 复刻 persist 的「整体替换、只读一次」语义（见 client-load.test.mjs 的长注释）。 */
-function fakeStoreModule(storage) {
-  return {
-    defineStore: (spec) => ({
-      spec,
-      create() {
-        let state = spec.init();
-        const raw = storage === undefined ? null : storage.getItem('immersion-glow.v1');
-        if (raw !== null && raw !== undefined) state = JSON.parse(raw);
-        const actions = {};
-        for (const [key, mutate] of Object.entries(spec.actions)) {
-          actions[key] = (...args) => mutate(state, ...args);
-        }
-        return { actions, getSnapshot: () => state, subscribe: () => () => {} };
-      },
-    }),
-  };
-}
-
-function makeFakeCtx(services = {}) {
-  const record = { registered: [], provideRootCalls: [] };
-  let disposers = [];
-  const ctx = {
-    effect: (execute, label) => {
-      record.effects = record.effects ?? [];
-      record.effects.push(label ?? '');
-      const disposer = typeof execute === 'function' ? execute() : undefined;
-      const normalized = typeof disposer === 'function' ? disposer : () => {};
-      disposers.push(normalized);
-      return normalized;
-    },
-    get: (name) => (Object.prototype.hasOwnProperty.call(services, name) ? services[name] : undefined),
-    slots: {
-      provideRoot: (contribution) => {
-        record.provideRootCalls.push(contribution);
-        return () => {};
-      },
-      inject: (key, callback) => {
-        record.registered.push({ kind: 'inject', key });
-        const inner = callback();
-        return typeof inner === 'function' ? inner : () => {};
-      },
-      register: (options, component) => {
-        record.registered.push({ kind: 'register', name: options.name, component });
-        return () => {};
-      },
-    },
-  };
-  return { ctx, record, disposeAll: () => disposers.forEach((d) => d()) };
-}
 
 function loadBundle(options = {}) {
   let spec = null;
@@ -286,36 +222,6 @@ function hudElement(env) {
   return tree;
 }
 
-/**
- * 递归找带指定 class 的节点，必要时**先渲染**还没被调用的组件元素。
- *
- * 插槽组件返回的是元素树而不是已渲染的 DOM：React 会在挂载时才调用
- * CornerMeter 这类子组件。所以要断言「右上角读数出现了」，得在遍历时把
- * function 类型的元素调用一遍 —— 否则永远只看到一层空壳。
- */
-function findByClass(node, className, depth = 0) {
-  if (node === null || node === undefined) return null;
-  if (depth > 12) return null; // 防御：组件互相渲染时不至于无限递归
-
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const hit = findByClass(child, className, depth + 1);
-      if (hit !== null) return hit;
-    }
-    return null;
-  }
-  if (typeof node !== 'object') return null;
-
-  // 尚未渲染的组件元素：先把它跑起来。
-  if (typeof node.type === 'function' && node.props !== undefined) {
-    return findByClass(node.type(node.props), className, depth + 1);
-  }
-
-  const props = node.props ?? {};
-  const classes = String(props.class ?? props.className ?? '');
-  if (classes.split(/\s+/).includes(className)) return node;
-  return findByClass(node.children, className, depth + 1);
-}
 
 test('未发起询问时右上角不出现读数', () => {
   const env = boot({ chat: null, model: null });
@@ -705,21 +611,6 @@ test('历史区块里的模型不再需要「本次」标记（去重后它必�
   );
 });
 
-/** 收集一棵元素树里所有文本节点的拼接串（用于「文案是否出现」类断言）。 */
-function collectText(node, depth = 0) {
-  if (node === null || node === undefined || depth > 14) return '';
-  if (typeof node === 'string' || typeof node === 'number') return String(node);
-  if (Array.isArray(node)) return node.map((child) => collectText(child, depth + 1)).join('');
-  if (typeof node !== 'object') return '';
-  if (typeof node.type === 'function') return collectText(node.type(node.props ?? {}), depth + 1);
-  const props = node.props ?? {};
-  const className = String(props.class ?? props.className ?? '');
-  // 跳过 aria/title 这类非可视文本，否则断言会误判。
-  if (className.includes('ig-ring') || className.includes('ig-hud-model')) {
-    return collectText(node.children, depth + 1);
-  }
-  return collectText(node.children, depth + 1);
-}
 
 /** 起一个已「发起过」的环境：探针跑过一次，有模型与统计。 */
 function bootedWithData() {
@@ -952,22 +843,6 @@ function runMigrate(raw, now) {
 }
 const loadMigrate = {};
 
-/** 收集所有带指定 class 的节点（findByClass 只返回第一个）。 */
-function findAllByClass(node, className, out = [], depth = 0) {
-  if (node === null || node === undefined || depth > 12) return out;
-  if (Array.isArray(node)) {
-    for (const child of node) findAllByClass(child, className, out, depth + 1);
-    return out;
-  }
-  if (typeof node !== 'object') return out;
-  if (typeof node.type === 'function' && node.props !== undefined) {
-    return findAllByClass(node.type(node.props), className, out, depth + 1);
-  }
-  const classes = String((node.props ?? {}).class ?? (node.props ?? {}).className ?? '');
-  if (classes.split(/\s+/).includes(className)) out.push(node);
-  findAllByClass(node.children, className, out, depth + 1);
-  return out;
-}
 
 /** 渲染图层并返回元素树。 */
 function render(env) {

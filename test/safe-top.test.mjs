@@ -13,30 +13,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { loadModule } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-function loadModule() {
-  const source = readFileSync(join(ROOT, 'src', 'client', 'safe-top.js'), 'utf8');
-  const declared = [...source.matchAll(/^(?:const|let|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
-  const sandbox = {
-    console, Date, Math, Number, Object, Array, JSON, Set, Map, String, RegExp, Symbol, Promise,
-  };
-  const context = createContext(sandbox);
-  runInContext(`${source}\n;globalThis.__names = ${JSON.stringify(declared)};`, context);
-  const names = runInContext('globalThis.names', context) ?? runInContext('globalThis.__names', context);
-  const exported = {};
-  for (const key of names) {
-    try {
-      exported[key] = runInContext(key, context);
-    } catch (_error) {
-      // 注释里出现的名字取不到，跳过。
-    }
-  }
-  return exported;
-}
 
-const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP, MEASURE_DEBOUNCE_MS } = loadModule();
+const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP, MEASURE_DEBOUNCE_MS } = loadModule('safe-top.js');
 
 /**
  * 期望偏移 = 外壳底边 + 间隔。
@@ -76,8 +58,12 @@ function fakeTree(spec) {
 }
 
 /**
-
-/**
+ * 核心几何：从一堆候选里挑出外壳的底边。
+ *
+ * ⚠ 这里原先残留了一个孤立的块注释起始符（后面紧跟另一个起始符），
+ * 把**前 9 个测试整段注释掉了** —— 而 `npm test` 一直报绿，因为被注释掉的
+ * 测试根本没注册。见 ADR-139：注释配平现在是自动检查项。
+ */
 test('量出通栏外壳的底边', () => {
   const { root, doc } = fakeTree({
     nodes: [

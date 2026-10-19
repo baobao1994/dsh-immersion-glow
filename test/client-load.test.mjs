@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { fakeReact, fakeStoreModule, makeFakeCtx } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,126 +30,6 @@ execFileSync(process.execPath, [join(ROOT, 'tools', 'build-client.mjs')], { stdi
 const BUNDLE = readFileSync(join(ROOT, 'lib', 'client.js'), 'utf8');
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
-/** 最小 React 替身：足够让组件函数被调用并返回元素树。 */
-function fakeReact() {
-  const createElement = (type, props, ...children) => ({
-    type,
-    props: props ?? {},
-    children: children.flat(),
-  });
-  return {
-    createElement,
-    Fragment: Symbol('Fragment'),
-    useState: (value) => [value, () => {}],
-    // 立即执行一次：探针的 writeSession 发生在 effect 里，noop 会让「写没写
-    // store」的断言变成空转。副作用对真实 React 也是提交后立刻跑，语义一致。
-    useEffect: (fn) => {
-      fn();
-    },
-    useCallback: (fn) => fn,
-    useMemo: (fn) => fn(),
-    useRef: (value) => ({ current: value }),
-  };
-}
-
-/**
- * 假的 store 引擎。
- *
- * 真的应用 actions（我们的 mutator 都是对普通对象直接赋值/展开，不需要 immer 代理），
- * 这样测试可以驱动真实的状态迁移，而不是对着空函数断言。
- *
- * ⚠ **必须复刻真实的恢复语义**：`dsh-client-store` 的 attachPersistence 是
- *
- *     const raw = localStorage.getItem(name);
- *     if (raw !== null) api.setState(devFreeze(JSON.parse(raw)), true);
- *
- * 即「从 localStorage 读、whole state 直接替换 init() 的结果」，**不是合并**。
- * 早先这里只做 `spec.init()` 就返回，于是「旧 schema 缺 sessions 字段导致
- * `draft.sessions` 为 undefined、switchSession 抛 TypeError、apply 整体失败」
- * 这条真实故障在 82 个测试全绿的情况下被完全掩盖。
- *
- * 它读的是 **storage 里的当前值**（而不是某个固定变量），这点很关键：只有这样
- * 才能验证 preparePersistedState 的迁移「确实发生在引擎读取之前」。
- *
- * @param storage - localStorage 替身。
- */
-function fakeStoreModule(storage) {
-  return {
-    defineStore: (spec) => ({
-      spec,
-      create() {
-        let state = spec.init();
-        const raw = storage === undefined ? null : storage.getItem('immersion-glow.v1');
-        if (raw !== null && raw !== undefined) {
-          state = JSON.parse(raw); // 整体替换，而复刻「非合并」语义。
-        }
-        const actions = {};
-        for (const [key, mutate] of Object.entries(spec.actions)) {
-          actions[key] = (...args) => mutate(state, ...args);
-        }
-        return {
-          actions,
-          getSnapshot: () => state,
-          subscribe: () => () => {},
-          clearPersisted: () => {},
-        };
-      },
-    }),
-  };
-}
-
-/**
- * 记录所有注册与副作用，供断言。
- *
- * @param services - 可选：`ctx.get(name)` 的返回值表。用它可以注入真实的
- *   `sessions` 服务面，从而让「当前会话解析」这条路真的被跑到。
- */
-function makeFakeCtx(services = {}) {
-  const record = {
-    effects: [],
-    registered: [],
-    provideRootCalls: [],
-    domListeners: [],
-    intervals: [],
-  };
-
-  let disposers = [];
-
-  const ctx = {
-    effect: (execute, label) => {
-      record.effects.push(label ?? 'anonymous');
-      const disposer = typeof execute === 'function' ? execute() : undefined;
-      const normalized = typeof disposer === 'function' ? disposer : () => {};
-      disposers.push(normalized);
-      return normalized;
-    },
-    get: (name) => (Object.prototype.hasOwnProperty.call(services, name) ? services[name] : undefined),
-    slots: {
-      provideRoot: (contribution) => {
-        record.provideRootCalls.push(contribution);
-        return () => {};
-      },
-      inject: (key, callback) => {
-        record.registered.push({ kind: 'inject', key });
-        // 立即执行回调，等价于插槽已声明就绪的分支。
-        const inner = callback();
-        return typeof inner === 'function' ? inner : () => {};
-      },
-      register: (options, component) => {
-        record.registered.push({ kind: 'register', name: options.name, id: options.id, component });
-        return () => {};
-      },
-    },
-  };
-
-  /** 依次调用所有 effect 的 disposer，模拟插件卸载。 */
-  const disposeAll = () => {
-    for (const disposer of disposers) disposer();
-    disposers = [];
-  };
-
-  return { ctx, record, disposeAll };
-}
 
 /**
  * 在沙箱里跑产物，返回 module.exports 与副作用记录。

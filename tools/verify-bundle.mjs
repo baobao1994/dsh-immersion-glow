@@ -350,8 +350,26 @@ const ACTION_ALLOWLIST = new Set([
 
 {
   const stateSource = readFileSync(join(ROOT, 'src', 'client', 'state.js'), 'utf8');
+
+  // 宽匹配：所有「4 空格缩进的 name(」——actions 对象里的方法简写。
+  const broad = [...stateSource.matchAll(/^    ([a-zA-Z][a-zA-Z0-9]*)\(/gm)].map((m) => m[1]);
+  // 窄匹配：进一步要求首参叫 draft（下面的接线检查要用它来定位 action）。
   const declared = [...stateSource.matchAll(/^    ([a-zA-Z][a-zA-Z0-9]*)\(draft/gm)].map((m) => m[1]);
+
   expect(declared.length > 10, `没能从 state.js 解析出 action 列表（只找到 ${declared.length} 个），检查正则是否与写法脱节`);
+
+  // ⚠ 自洽校验：窄匹配必须覆盖全部宽匹配。
+  //
+  // 只断言「> 10 个」是不够的 —— 它只能发现「解析全崩」，发现不了「24 个里少了 1 个」。
+  // 若某个 action 的首参不叫 draft（改名、或写成 foo(state, …)），它就会**悄悄**
+  // 退出接线检查，而检查照样报绿。一条静默漏检的检查比没有检查更危险：
+  // 它给人「已经守住了」的错觉。
+  const uncovered = broad.filter((name) => !declared.includes(name));
+  expect(
+    broad.length === declared.length,
+    `action 解析可能漏项：宽匹配 ${broad.length} 个、窄匹配 ${declared.length} 个；未被检查的：${uncovered.join(', ')}。` +
+      '若确实改了首参名，请同步更新本检查的正则',
+  );
 
   // 除 state.js 外的所有客户端源码 + 全部测试：任何一个调过就算接上了。
   const consumers = [
@@ -371,6 +389,97 @@ const ACTION_ALLOWLIST = new Set([
   }
 }
 
+// ── 11. 测试文件里不能有「被注释掉」的测试 ──────────────────────────
+//
+// 这条来自一次真实的假绿：safe-top.test.mjs 里残留了一个孤立的块注释起始符
+// （`/**` 后面又紧跟一个 `/**`），把**前 9 个测试整段注释掉了** —— 包括全部
+// 核心几何单测。而 `npm test` 一直报「全绿」，因为被注释掉的测试根本没注册，
+// 报出来的数字里压根没有它们。测试少几个是不会有人注意的。
+//
+// 做法：把注释**遮蔽成空白**（保留换行），再数「以 test( 开头的行」。
+// 遮蔽后比遮蔽前少，就说明有测试躺在注释里。
+{
+  const testDir = join(ROOT, 'test');
+  const testFiles = existsSync(testDir)
+    ? readdirSync(testDir).filter((name) => name.endsWith('.test.mjs'))
+    : [];
+
+  /**
+   * 把注释替换成等长空白（换行保留），其余原样。
+   *
+   * @param src - 源码。
+   * @returns { text, unclosed } —— unclosed 为真表示块注释没闭合。
+   */
+  const maskComments = (src) => {
+    const out = src.split('');
+    let inBlock = false;
+    let inLine = false;
+    for (let i = 0; i < src.length; i += 1) {
+      const c = src[i];
+      const next = src[i + 1];
+      if (c === '\n') {
+        inLine = false;
+        continue;
+      }
+      if (inLine) {
+        out[i] = ' ';
+        continue;
+      }
+      if (inBlock) {
+        if (c === '*' && next === '/') {
+          out[i] = ' ';
+          out[i + 1] = ' ';
+          i += 1;
+          inBlock = false;
+          continue;
+        }
+        out[i] = ' ';
+        continue;
+      }
+      if (c === '/' && next === '/') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 1;
+        inLine = true;
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 1;
+        inBlock = true;
+        continue;
+      }
+    }
+    return { text: out.join(''), unclosed: inBlock };
+  };
+
+  /** 以 test( 开头的行号（1 基）。 */
+  const testLines = (text) =>
+    text
+      .split('\n')
+      .map((line, index) => (line.trimStart().startsWith('test(') ? index + 1 : 0))
+      .filter((n) => n !== 0);
+
+  for (const name of testFiles) {
+    const src = readFileSync(join(testDir, name), 'utf8');
+    const masked = maskComments(src);
+
+    expect(!masked.unclosed, `${name}: 块注释没有闭合 —— 它会把文件剩下的内容全部注释掉`);
+
+    const before = testLines(src);
+    const after = testLines(masked.text);
+    const lost = before.filter((n) => !after.includes(n));
+
+    expect(
+      lost.length === 0,
+      `${name}: 第 ${lost.join(', ')} 行的 test( 落在注释里，不会被注册。` +
+        '这类问题不会让 npm test 变红，只会让测试无声消失（曾真实发生：9 个核心几何单测被一个孤立块注释吃掉）',
+    );
+    expect(before.length > 0, `${name}: 一个 test( 都没解析到，检查文件是否写坏`);
+  }
+}
+
 // ── 汇总 ───────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ 产物自检失败（${failures.length} 项）：`);
@@ -379,5 +488,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `✓ 产物自检通过（清单 / patch / locale / 零网络 / require 白名单 / action 接线 / 沙箱注册 ${sourceFiles.length} 个模块）`,
+  `✓ 产物自检通过（清单 / patch / locale / 零网络 / require 白名单 / action 接线 / 测试健康 / 沙箱注册 ${sourceFiles.length} 个模块）`,
 );
