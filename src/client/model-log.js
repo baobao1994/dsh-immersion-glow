@@ -421,15 +421,26 @@ function ringProgress(params) {
   // 本次任务的模型耗时可能远大于活跃时长（模型思考时用户不操作），但阈值提醒
   // 计的是「你自己的活跃时间」。两者口径不同，这里用活跃时长对阈值，环形读数
   // 仍然显示模型耗时 —— 环表示「休息进度」，中心数字表示「模型花了多久」。
-  const step = list.length >= 2 ? list[list.length - 1] - list[list.length - 2] : list[0];
-  const span = (Number.isFinite(step) && step > 0 ? step : list[0]) * 60000;
-  if (span <= 0) return { ratio: 0, nextAtMs: 0, crossed: false };
-
-  // 已越过几档（0 基）。
-  let index = 0;
-  while (index < list.length && elapsed >= list[index] * 60000) index += 1;
+  //
+  // ⚠⚠ 档位数必须**不封顶**。
+  //
+  // 阈值数组只有三档（20/40/60），但「末档之后按末档步长继续」意味着虚拟档位会
+  // 一直往后延伸：80、100、120…（语义见 timing.nextThresholdMs）。
+  // 早先这里写的是 `while (index < list.length && …)`，把 index 封顶在 3，
+  // 于是 nextAtMs 恒等于 nextThresholdMs(list, 3) = 80 分钟 —— 活跃时长一旦超过
+  // 80 分钟，剩余就永远是 max(0, 80 - elapsed) = 0，界面卡在「下次提醒还有 1 秒」
+  // 再也不动（实测 bug）。同时环也被钉在满格。
+  //
+  // 复用 timing.satisfiedCount：它用 nextThresholdMs 迭代，天然不封顶。
+  const index = satisfiedCount(list, elapsed);
   const nextAtMs = nextThresholdMs(list, index);
-  const overshoot = elapsed - (index === 0 ? 0 : list[index - 1] * 60000);
-  const ratio = Math.min(0.999, Math.max(0, overshoot / span));
+
+  // 本档的起点 = 上一档的边界（第一档的起点是 0）。这样 ratio 始终是
+  // 「在本档内走了多少」，跨档时归零重新蓄满。
+  const bandStart = index === 0 ? 0 : nextThresholdMs(list, index - 1);
+  const bandSpan = nextAtMs - bandStart;
+  const ratio = bandSpan > 0
+    ? Math.min(0.999, Math.max(0, (elapsed - bandStart) / bandSpan))
+    : 0;
   return { ratio, nextAtMs, crossed: index > 0 };
 }

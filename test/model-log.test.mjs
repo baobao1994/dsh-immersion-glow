@@ -584,3 +584,77 @@ test('formatElapsed：畸形输入不抛', () => {
     assert.doesNotThrow(() => formatElapsed(bad, t), `${String(bad)} 不该抛`);
   }
 });
+
+// ── 回归：「下次提醒还有 1 秒」卡死（v11 修的真实 bug）────────────────
+//
+// 现象：用户长会话中界面卡在「下次提醒还有 1 秒」不动。
+//
+// 根因：ringProgress 里算已满足档数时把 index **封顶在 list.length**：
+//     while (index < list.length && elapsed >= list[index] * 60000) index += 1;
+// 阈值 [20,40,60] 只有三档，于是 index 最大是 3，nextAtMs 恒等于
+// nextThresholdMs(list, 3) = 80 分钟。活跃时长一旦超过 80 分钟，剩余就永远是
+// max(0, 80 - elapsed) = 0，界面卡死；环也被钉在满格。
+//
+// 修法：改用 timing.satisfiedCount —— 它按 nextThresholdMs 迭代，不封顶，
+// 因此末档之后的虚拟档位（80、100、120…）会继续往后延伸。
+
+test('回归：活跃时长超过末档后，剩余时长仍然在增长（不再卡在 1 秒）', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const list = [20, 40, 60];
+  let previousRemaining = Infinity;
+  let sawIncrease = false;
+
+  for (const minutes of [81, 85, 90, 95, 99]) {
+    const p = ringProgress({ elapsedMs: minutes * 60000, thresholdsMin: list, modelMs: 0 });
+    const remaining = p.nextAtMs - minutes * 60000;
+    assert.ok(remaining > 0, `${minutes} 分钟的剩余必须是正数，实际 ${remaining}`);
+    assert.ok(
+      remaining <= 20 * 60000,
+      `${minutes} 分钟的剩余不该超过一个档位步长，实际 ${remaining / 60000} 分`,
+    );
+    if (remaining < previousRemaining) sawIncrease = true;
+    previousRemaining = remaining;
+  }
+  assert.ok(sawIncrease, '剩余应当随时间递减（即 nextAt 在往后走），而不是恒定不变');
+});
+
+test('回归：跨过 80 分钟时从新档重新蓄满环', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const list = [20, 40, 60];
+  // 79 分钟：还在 60→80 档里，接近满。
+  const before = ringProgress({ elapsedMs: 79 * 60000, thresholdsMin: list, modelMs: 0 });
+  assert.ok(before.ratio > 0.9, `79 分钟应接近满环，实际 ${before.ratio}`);
+  // 80 分钟：刚好进入 80→100 档，环应归零重新蓄。
+  const at = ringProgress({ elapsedMs: 80 * 60000, thresholdsMin: list, modelMs: 0 });
+  assert.equal(at.ratio, 0, '跨档瞬间环应归零');
+  assert.equal(at.nextAtMs, 100 * 60000, '下一档应是 100 分钟');
+  // 90 分钟：新档走了一半。
+  const mid = ringProgress({ elapsedMs: 90 * 60000, thresholdsMin: list, modelMs: 0 });
+  assert.ok(Math.abs(mid.ratio - 0.5) < 0.01, `90 分钟应是半环，实际 ${mid.ratio}`);
+});
+
+test('回归：极长活跃时长（数小时）也不会卡住', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const list = [20, 40, 60];
+  for (const minutes of [120, 180, 400, 1440]) {
+    const p = ringProgress({ elapsedMs: minutes * 60000, thresholdsMin: list, modelMs: 0 });
+    const remaining = p.nextAtMs - minutes * 60000;
+    assert.ok(remaining > 0, `${minutes} 分钟（约 ${Math.round(minutes / 60)} 小时）剩余必须为正`);
+    assert.ok(remaining <= 20 * 60000, `${minutes} 分钟剩余应在档位内`);
+    assert.ok(p.ratio >= 0 && p.ratio < 1, `${minutes} 分钟环比例应在 [0,1)`);
+  }
+});
+
+test('档位不封顶：nextAtMs 随活跃时长单调递增', () => {
+  const { ringProgress } = loadModules(['timing.js', 'model-log.js']);
+  const list = [20, 40, 60];
+  let previous = 0;
+  for (const minutes of [1, 20, 40, 60, 80, 100, 200, 500]) {
+    const p = ringProgress({ elapsedMs: minutes * 60000, thresholdsMin: list, modelMs: 0 });
+    assert.ok(
+      p.nextAtMs > previous,
+      `${minutes} 分钟的 nextAtMs (${p.nextAtMs / 60000}) 应大于前一档 (${previous / 60000})`,
+    );
+    previous = p.nextAtMs;
+  }
+});
