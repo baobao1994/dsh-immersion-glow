@@ -508,20 +508,59 @@ test('展开面板里显示逐模型历史评价与备注', () => {
 
 test('记录卡里出现「历史累计」区块', () => {
   const env = bootedWithData();
-  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 5, note: '很好', recordId: 'old-1' });
+  // 前置条件：那个模型要在**历史会话**里真的用过（有累计用量）。
+  // 只有评价没有用量的模型不进历史 —— 历史区块回答的是「以前用过多久」。
+  env.actions.writeSession({
+    sessionId: 'old-session',
+    now: Date.now(),
+    models: [{ key: 'old/gpt-x', provider: 'old', model: 'gpt-x', modelMs: 900000, steps: 8, turns: 4, lastUsedAt: 1 }],
+  });
+  env.actions.addModelNote({ modelKey: 'old/gpt-x', rating: 5, note: '很好', recordId: 'old-1' });
   env.actions.setCardOpen(true);
 
-  const tree = env.layer.component({
-    React: fakeReact(),
-    useImmersionGlow: env.selectorHook,
-    useSessions: () => undefined,
-    immersionGlowActions: env.actions,
-  });
+  const tree = render(env);
   const panel = findByClass(tree, 'ig-panel');
   assert.ok(panel !== null, '记录卡应打开');
   assert.ok(findByClass(panel, 'ig-history') !== null, '应有历史累计区块');
-  const labels = collectText(panel);
-  assert.ok(labels.includes('累计'), '应出现累计文案');
+  assert.ok(collectText(panel).includes('累计'), '应出现累计文案');
+});
+
+test('历史区块排除本次已列出的模型（不与「各模型」重复）', () => {
+  const env = bootedWithData();
+  // 本次用的两个模型都给评价 —— 它们已经由「各模型」区块完整展示了。
+  env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 5, note: '稳', recordId: 'r1' });
+  env.actions.addModelNote({ modelKey: 'anthropic/claude-opus', rating: 3, note: '一般', recordId: 'r2' });
+  env.actions.setCardOpen(true);
+
+  const tree = render(env);
+  const history = findByClass(tree, 'ig-history');
+  assert.equal(history, null, '本次的模型已在「各模型」里列过，历史不该重复它们');
+
+  // 反证：这些模型确实出现在「各模型」区块里。
+  const models = findByClass(tree, 'ig-models');
+  assert.ok(models !== null);
+  const text = collectText(models);
+  assert.ok(text.includes('deepseek-chat') && text.includes('claude-opus'));
+});
+
+test('历史区块只显示本次没用过、但你用过的模型', () => {
+  const env = bootedWithData();
+  // 造第二个会话，里面用了另一个模型。
+  env.actions.writeSession({
+    sessionId: 'old-session',
+    now: Date.now(),
+    models: [{ key: 'old/gpt-x', provider: 'old', model: 'gpt-x', modelMs: 900000, steps: 8, turns: 4, lastUsedAt: 1 }],
+  });
+  env.actions.addModelNote({ modelKey: 'old/gpt-x', rating: 4, note: '老搭档', recordId: 'r9' });
+  env.actions.setCardOpen(true);
+
+  const tree = render(env);
+  const history = findByClass(tree, 'ig-history');
+  assert.ok(history !== null, '应出现历史区块');
+  const text = collectText(history);
+  assert.ok(text.includes('gpt-x'), '应出现只在历史里的模型');
+  assert.ok(text.includes('老搭档'), '应带上它的备注');
+  assert.ok(!text.includes('deepseek-chat'), '本次的模型不该重复出现');
 });
 
 // v6：提醒不再是独立卡片，而是计时器的一种状态。
@@ -595,19 +634,23 @@ test('非 sticky 提醒到点即消失（不留下未读态）', () => {
   assert.equal(findByClass(tree, 'ig-ring--alert'), null, '也不该是倒计时态');
 });
 
-test('记录卡里的「本次」标记能区分历史条目', () => {
+test('历史区块里的模型不再需要「本次」标记（去重后它必然不是本次的）', () => {
   const env = bootedWithData();
-  env.actions.setCardOpen(true);
-  const tree = env.layer.component({
-    React: fakeReact(),
-    useImmersionGlow: env.selectorHook,
-    useSessions: () => undefined,
-    immersionGlowActions: env.actions,
+  env.actions.writeSession({
+    sessionId: 'old-session',
+    now: Date.now(),
+    models: [{ key: 'old/gpt-x', provider: 'old', model: 'gpt-x', modelMs: 900000, steps: 8, turns: 4, lastUsedAt: 1 }],
   });
+  env.actions.setCardOpen(true);
+
+  const tree = render(env);
   const history = findByClass(tree, 'ig-history');
   assert.ok(history !== null);
-  // 本次用到的模型应带「本次」标记。
-  assert.ok(findByClass(history, 'ig-history-now') !== null, '本次用到的模型应有标记');
+  assert.equal(
+    findByClass(history, 'ig-history-now'),
+    null,
+    '去重后历史里不该再有本次的模型，那个标记也就不必存在了',
+  );
 });
 
 /** 收集一棵元素树里所有文本节点的拼接串（用于「文案是否出现」类断言）。 */
@@ -757,4 +800,55 @@ function buildHandlers(env) {
     if (call.props !== undefined && call.props.igHandlers !== undefined) return call.props.igHandlers;
   }
   throw new Error('apply() 没有把 handlers 暴露到 root 面（index.js 的 provideRoot）');
+}
+
+// ── v8：面板打开时收拢态必须让位 ────────────────────────────────────
+
+test('打开记录卡时收拢态完全不渲染（不靠 z-index 压层级）', () => {
+  const env = bootedWithData();
+  // 先确认常态下它是在的 —— 否则「消失」这个断言没有意义。
+  const normal = render(env);
+  assert.ok(findByClass(normal, 'ig-hud') !== null, '常态应有收拢态');
+
+  env.actions.setCardOpen(true);
+  const withCard = render(env);
+  assert.equal(findByClass(withCard, 'ig-hud'), null, '面板打开时收拢态必须让位');
+  assert.ok(findByClass(withCard, 'ig-panel') !== null, '记录卡应可见');
+});
+
+test('打开汇总或画廊时收拢态同样让位', () => {
+  for (const flag of ['setSummaryOpen', 'setGalleryOpen']) {
+    const env = bootedWithData();
+    env.actions[flag](true);
+    const tree = render(env);
+    assert.equal(findByClass(tree, 'ig-hud'), null, `${flag} 打开时收拢态必须让位`);
+  }
+});
+
+test('收起面板后回到展开态计时器（不塌回收拢态）', () => {
+  const env = bootedWithData();
+  const handlers = buildHandlers(env);
+
+  handlers.openSummary();
+  assert.equal(env.instance.getSnapshot().ui.summaryOpen, true);
+
+  handlers.closeSummary();
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.summaryOpen, false);
+  assert.equal(ui.meterOpen, true, '应回到展开态，用户刚看完注意力还在这一块');
+
+  // 收起后应当看到的是展开面板而不是收拢小球。
+  const tree = render(env);
+  assert.equal(findByClass(tree, 'ig-hud'), null, '收拢态不该出现');
+  assert.ok(findByClass(tree, 'ig-hud-panel') !== null, '应回到展开态');
+});
+
+/** 渲染图层并返回元素树。 */
+function render(env) {
+  return env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
 }

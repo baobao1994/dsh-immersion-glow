@@ -1056,17 +1056,6 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   min-width: 0;
 }
 
-/* 「本次」标记：说明这个模型正在这次任务里被用，别和历史条目混淆。 */
-.ig-history-now {
-  font-size: 10.5px;
-  line-height: 15px;
-  padding: 0 5px;
-  border-radius: var(--dsw-radius-full, 999px);
-  color: var(--dsw-alias-text-brand, #539cfa);
-  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-  flex: none;
-}
-
 /* ── 汇总面板 ─────────────────────────────────────────────────────── */
 .ig-summary-list {
   display: flex;

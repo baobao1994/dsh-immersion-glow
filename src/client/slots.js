@@ -93,6 +93,8 @@ function registerSlots(params) {
         const activeSessionId = useImmersionGlow((value) => value.activeSessionId);
         const sessionsMap = useImmersionGlow((value) => value.sessions);
         const summaryOpen = useImmersionGlow((value) => value.ui.summaryOpen);
+        const cardOpen = useImmersionGlow((value) => value.ui.cardOpen);
+        const galleryOpen = useImmersionGlow((value) => value.ui.galleryOpen);
         // 右上角展开面板要显示「我历来给这个模型评过什么」（v5）。
         const verdicts = useImmersionGlow((value) => value.verdicts ?? {});
         const modelNotes = useImmersionGlow((value) => value.modelNotes ?? {});
@@ -157,18 +159,17 @@ function registerSlots(params) {
           metrics,
         };
 
+        // ── 面板互斥（v8）───────────────────────────────────────────
+        // 记录卡 / 画廊 / 汇总与计时器共用同一个锚点，同一时刻只显示一个。
+        // 收拢态尤其必须让位：它就贴在面板正上方那个位置，两个同时在必然重叠 ——
+        // 用户反馈「会被顶上的遮住」。所以这里直接**不渲染**它，而不是靠 z-index
+        // 压层级；层级只能决定谁在上面，不能消除重叠本身。
+        const panelOpen = cardOpen || galleryOpen || summaryOpen;
+
         return h(
           React.Fragment,
           null,
-          // 记录卡与汇总互斥：两个都是模态层，同时开会叠在一起。
-          h(RecordCard, {
-            ...shared,
-            // 记录卡的「历史累计」用它算跨会话模型排行。
-            sessions: sessionsMap,
-          }),
-          h(Gallery, { ...shared, actions: actionsRef }),
-          summaryOpen ? h(Summary, shared) : null,
-          h(CornerMeter, {
+          panelOpen ? null : h(CornerMeter, {
             ...shared,
             bucket: hudBucket,
             stats: bucket?.stats ?? null,
@@ -176,6 +177,13 @@ function registerSlots(params) {
             verdicts,
             modelNotes,
           }),
+          h(RecordCard, {
+            ...shared,
+            // 记录卡的「历史累计」用它算跨会话模型排行。
+            sessions: sessionsMap,
+          }),
+          h(Gallery, { ...shared, actions: actionsRef }),
+          summaryOpen ? h(Summary, shared) : null,
         );
       },
     ),

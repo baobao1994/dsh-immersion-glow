@@ -336,19 +336,35 @@ function apply(ctx) {
       actions.setSummaryOpen(false);
       actions.setCardOpen(true);
     },
-    closeCard: () => actions.setCardOpen(false),
+    /**
+     * 收起面板后回到**展开态**的计时器，而不是收拢态。
+     *
+     * 为什么：用户刚从记录卡/汇总里看完，注意力还在这一块。塌回一行小球等于
+     * 逼他再点一次才能继续看；而「回到我刚才的位置」是更符合预期的行为。
+     * `setMeterOpen(true)` 同时保证下方的收拢态不会闪现一瞬。
+     */
+    closeCard: () => {
+      actions.setCardOpen(false);
+      actions.setMeterOpen(true);
+    },
     openGallery: () => {
       actions.setCardOpen(false);
       actions.setSummaryOpen(false);
       actions.setGalleryOpen(true);
     },
-    closeGallery: () => actions.setGalleryOpen(false),
+    closeGallery: () => {
+      actions.setGalleryOpen(false);
+      actions.setMeterOpen(true);
+    },
     openSummary: () => {
       actions.setCardOpen(false);
       actions.setGalleryOpen(false);
       actions.setSummaryOpen(true);
     },
-    closeSummary: () => actions.setSummaryOpen(false),
+    closeSummary: () => {
+      actions.setSummaryOpen(false);
+      actions.setMeterOpen(true);
+    },
 
     /**
      * 从画廊「回看」某条收藏：关掉画廊，带焦点打开记录卡。

@@ -36,13 +36,15 @@ function loadModule() {
   return exported;
 }
 
-const { measureSafeTop, installSafeTop, FALLBACK_TOP } = loadModule();
+const { measureSafeTop, installSafeTop, FALLBACK_TOP, EDGE_GAP, CONTENT_INSET } = loadModule();
 
 /**
- * 期望偏移 = 外壳底边 + 间距(12) + 内容区内缩(16)。
- * 两段偏移的分工见 src/client/safe-top.js 的常量注释。
+ * 期望偏移 = 外壳底边 + 两段偏移。
+ *
+ * 直接引用被测模块导出的常量，而不是把数字抄一遍 —— 间距是纯观感参数，
+ * 用户已经来回调过三轮；抄数字的断言会在每次调整时变成一片假红。
  */
-const OFFSET_AFTER_EDGE = 12 + 16;
+const OFFSET_AFTER_EDGE = EDGE_GAP + CONTENT_INSET;
 
 /**
  * 造一个假的元素树。

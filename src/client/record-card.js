@@ -242,8 +242,16 @@ function RecordCard(props) {
   // ── 目的确认 ──────────────────────────────────────────────────────
   // ── 历史累计行 ─────────────────────────────────────────────────────
   // rankModels 是纯函数（summary.js），复用它算跨会话排行。
+  //
+  // ⚠ **必须排除本次已出现的模型**：上面「各模型」区块已经列了它们，连带评分和
+  // 备注。在历史里再列一遍就是同一屏出现两遍同样的内容（实测截图确认）——
+  // 历史区块的价值恰恰在于「本次没用到、你以前常用」的那些模型。
+  //
   // 只取前几条：记录卡是「看这次」的地方，历史越列越长就越界了。
-  const historyRows = rankModels(props.sessions).slice(0, HISTORY_ROWS);
+  const presentKeys = modelEntries.map((item) => item.key);
+  const historyRows = rankModels(props.sessions)
+    .filter((entry) => presentKeys.indexOf(entry.key) === -1)
+    .slice(0, HISTORY_ROWS);
 
   /** 历史累计的一行。 */
   const historyRow = (entry) => {
@@ -254,8 +262,6 @@ function RecordCard(props) {
         ? notes.reduce((sum, item) => sum + (Number.isFinite(item?.rating) ? item.rating : 0), 0) /
           notes.length
         : 0;
-    const usedHere = modelEntries.some((item) => item.key === key);
-
     return h(
       'li',
       { class: 'ig-history-row', key },
@@ -264,7 +270,6 @@ function RecordCard(props) {
         { class: 'ig-hud-row-head' },
         h('span', { class: 'ig-hud-row-model' }, modelLabel(entry)),
         rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
-        usedHere ? h('span', { class: 'ig-history-now' }, t('card.history.now')) : null,
         h('span', { class: 'ig-hud-row-time' }, formatElapsed(entry.modelMs, t)),
       ),
       h(
