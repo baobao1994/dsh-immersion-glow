@@ -485,11 +485,12 @@ test('阈值触发弹 sticky 提醒卡：60s 倒计时与未读流', () => {
   assert.ok(reminder.deadlineAt < clock.now, '已过倒计时');
   assert.equal(instance.getSnapshot().ui.reminder !== null, true, '未读必须保留，不能自己消失');
 
-  // 用户点击徽标 → 打开记录卡并清除未读。
-  actions.openFromReminder();
+  // 用户点击 → 清除未读并展开计时器（v12 起这是唯一入口；
+  // 旧的「点开记录卡」路径已随提醒卡的删除一并移除）。
+  actions.openMeter();
   const after = instance.getSnapshot();
   assert.equal(after.ui.reminder, null, '点击后未读清除');
-  assert.equal(after.ui.cardOpen, true, '点击后打开记录卡');
+  assert.equal(after.ui.meterOpen, true, '点击后展开计时器');
 });
 
 // ── 回归 A：当前会话 id 必须从真实的 SessionListState 解析出来 ──────────

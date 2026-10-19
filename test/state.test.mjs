@@ -244,13 +244,16 @@ test('showReminder：空/非字符串 message 忽略', () => {
   assert.equal(draft.ui.reminder, null);
 });
 
-test('openFromReminder：清提醒并打开记录卡', () => {
+test('openMeter：清提醒并展开计时器（点开 = 已看）', () => {
   const draft = draftOf();
   const actions = STATE.createActions();
   actions.showReminder(draft, { message: 'x', sticky: true });
-  actions.openFromReminder(draft);
+  actions.openMeter(draft);
   assert.equal(draft.ui.reminder, null, '未读随之清除');
-  assert.equal(draft.ui.cardOpen, true);
+  assert.equal(draft.ui.meterOpen, true, '展开计时器');
+  // 它同时保证不会有两个浮层叠着。
+  assert.equal(draft.ui.cardOpen, false);
+  assert.equal(draft.ui.summaryOpen, false);
 });
 
 test('dismissReminder：只清提醒，不开卡', () => {

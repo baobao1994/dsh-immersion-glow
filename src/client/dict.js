@@ -43,6 +43,7 @@ const ZH = {
   'hud.alert.body': '该歇一下了',
   'hud.alert.unread': '有提醒未看',
   'hud.alert.seconds': '{n}s 后收起',
+  'hud.alert.dismiss': '知道了',
   'hud.openCard': '打开记录卡',
   'hud.openSummary': '看汇总',
 
@@ -177,6 +178,7 @@ const EN = {
   'hud.alert.body': 'Time to step away',
   'hud.alert.unread': 'Unread reminder',
   'hud.alert.seconds': 'hides in {n}s',
+  'hud.alert.dismiss': 'Got it',
   'hud.openCard': 'Open record',
   'hud.openSummary': 'Summary',
 

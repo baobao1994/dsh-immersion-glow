@@ -451,19 +451,50 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   align-self: center;
 }
 
-/* 展开面板顶部的提醒条。 */
+/*
+ * 展开面板顶部的提醒条。
+ *
+ * 它是**可点的按钮**而不是一行说明文字：面板已经开着时收到提醒，收拢态的点击
+ * 路径走不到，这里就是唯一的「标为已看」入口。
+ */
 .ig-hud-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  font: inherit;
   font-size: 12px;
   line-height: 17px;
   color: var(--dsw-alias-label-warning, #d9a441);
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
   margin: 0;
-  padding: 6px 9px;
+  padding: 7px 10px;
   border-radius: var(--dsw-radius-sm, 6px);
+  cursor: pointer;
+  text-align: left;
 }
 
-.ig-hud-banner--unread {
-  color: var(--dsw-alias-label-warning, #d9a441);
+.ig-hud-banner:hover {
+  background: var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.2));
+}
+
+.ig-hud-banner:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+
+.ig-hud-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 「知道了」的动作提示：弱一档，不跟主文案抢注意力。 */
+.ig-hud-banner-action {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.85));
 }
 
 /*

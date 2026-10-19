@@ -224,7 +224,8 @@ function CornerMeter(props) {
         'aria-expanded': 'false',
         'aria-label': t('hud.open.aria', { duration: formatElapsed(modelMs, t) }),
         title: `${modelName} · ${formatElapsed(modelMs, t)}`,
-        onClick: () => setOpen(true),
+        // 点开 = 已看。走 handler 而不是 setOpen，否则提醒永远消不掉（v6 的坑）。
+        onClick: () => handlers.openMeter(),
       },
       ring(),
       h(
@@ -335,12 +336,20 @@ function CornerMeter(props) {
       ),
     ),
 
-    // 提醒态下，面板顶部也保留一行提示：用户可能是在面板里才看到的提醒。
+    // 提醒态下，面板顶部也保留一行提示：用户可能是面板已经开着的时候才收到的提醒
+    // （那种情况下收拢态的点击路径走不到）。所以这行**必须可点**，否则未读同样
+    // 消不掉 —— 这是收拢态之外的第二条「标为已看」路径。
     alert !== null
       ? h(
-          'p',
-          { class: `ig-hud-banner${alert.mode === 'unread' ? ' ig-hud-banner--unread' : ''}` },
-          t(alert.mode === 'unread' ? 'hud.alert.unread' : 'hud.alert.body'),
+          'button',
+          {
+            type: 'button',
+            class: `ig-hud-banner${alert.mode === 'unread' ? ' ig-hud-banner--unread' : ''}`,
+            onClick: () => handlers.dismissAlert(),
+            title: t('hud.alert.dismiss'),
+          },
+          h('span', { class: 'ig-hud-banner-text' }, t(alert.mode === 'unread' ? 'hud.alert.unread' : 'hud.alert.body')),
+          h('span', { class: 'ig-hud-banner-action' }, t('hud.alert.dismiss')),
         )
       : null,
 

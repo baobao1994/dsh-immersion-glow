@@ -583,21 +583,73 @@ test('提醒让计时器转入警示态，而不是多出一个浮层', () => {
   assert.ok(findByClass(tree, 'ig-hud-sub-line--alert') !== null, '副行应显示倒计时');
 });
 
+// ⚠ 这条测试的**名字**一直写着「清未读」，但 v6~v11 的断言里只有 meterOpen。
+// 于是「提醒永远消不掉」这个真 bug 溜了过去：状态确实清得掉（action 在），
+// 只是**没有任何 UI 调用它** —— 而断言只看了面板状态，没看提醒状态。
+// 现在把「清未读」真正断言上。
 test('提醒态下点击计时器：清未读 + 展开明细', () => {
   const env = bootedWithData();
   env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
-  const tree = env.layer.component({
-    React: fakeReact(),
-    useImmersionGlow: env.selectorHook,
-    useSessions: () => undefined,
-    immersionGlowActions: env.actions,
-  });
+  assert.ok(env.instance.getSnapshot().ui.reminder !== null, '前置：确实有未读');
+
+  const tree = render(env);
   const hud = findByClass(tree, 'ig-hud');
   hud.props.onClick();
 
   const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.reminder, null, '点开计时器 = 已看，未读必须清掉');
   assert.equal(ui.meterOpen, true, '应展开明细');
   assert.equal(ui.cardOpen, false, '不再直接打开记录卡');
+});
+
+test('点开后界面上不再有未读标记', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+  findByClass(render(env), 'ig-hud').props.onClick();
+
+  const after = render(env);
+  assert.equal(findByClass(after, 'ig-ring--unread'), null, '未读环样式应消失');
+  assert.equal(findByClass(after, 'ig-hud-dot'), null, '未读点应消失');
+  assert.equal(findByClass(after, 'ig-hud-banner'), null, '提醒条应消失');
+});
+
+test('已超时的未读：点开同样能清掉（不只看倒计时那条路）', () => {
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: 1_000_000 });
+  // 推过 deadline，进入未读态。
+  env.instance.getSnapshot().ui.reminder.deadlineAt = 1;
+  assert.ok(findByClass(render(env), 'ig-ring--unread') !== null, '前置：应为未读态');
+
+  findByClass(render(env), 'ig-hud').props.onClick();
+  assert.equal(env.instance.getSnapshot().ui.reminder, null, '未读态也必须能清');
+});
+
+test('展开态下收到提醒：点提醒条也能标为已看', () => {
+  const env = bootedWithData();
+  // 先展开计时器，再收到提醒 —— 此时收拢态的点击路径走不到。
+  env.actions.setMeterOpen(true);
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+
+  const tree = render(env);
+  const banner = findByClass(tree, 'ig-hud-banner');
+  assert.ok(banner !== null, '展开态应显示提醒条');
+  assert.equal(banner.type, 'button', '提醒条必须是可点的按钮，否则未读消不掉');
+
+  banner.props.onClick();
+  assert.equal(env.instance.getSnapshot().ui.reminder, null, '点提醒条应清未读');
+  // 只清提醒，不该把面板收起来。
+  assert.equal(env.instance.getSnapshot().ui.meterOpen, true, '面板应保持展开');
+});
+
+test('「点开 = 已看」有 UI 调用点（防止 action 变成死代码）', () => {
+  // 这条断言的是「接线」而不是「状态机」：openMeter / dismissReminder 两个
+  // action 曾经都在，却没有任何组件调用它们 —— 状态机测试全绿而功能完全失效。
+  const env = bootedWithData();
+  env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+  const collapsed = findByClass(render(env), 'ig-hud');
+  assert.equal(typeof collapsed.props.onClick, 'function', '收拢态必须有点击处理');
+  collapsed.props.onClick();
+  assert.equal(env.instance.getSnapshot().ui.reminder, null, '收拢态点击必须真的清掉提醒');
 });
 
 test('sticky 提醒超时后进入未读态（持续警示，不消失）', () => {

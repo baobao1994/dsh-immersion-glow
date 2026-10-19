@@ -296,16 +296,6 @@ function createActions() {
       draft.ui.meterOpen = true;
     },
 
-    /**
-     * 用户点开了提醒（徽标或仍在倒计时的卡片）：清掉它并打开记录卡。
-     *
-     * 保留给仍想直接进卡片的入口（比如设置行）。日常路径见 openMeter。
-     */
-    openFromReminder(draft) {
-      draft.ui.reminder = null;
-      draft.ui.cardOpen = true;
-    },
-
     /** 关掉提醒（不打开记录卡）。倒计时结束的确认类提醒走卸载，不需要调它。 */
     dismissReminder(draft) {
       draft.ui.reminder = null;
