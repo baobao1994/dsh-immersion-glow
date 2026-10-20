@@ -12,17 +12,30 @@
  *   2. 空闲 gap > resetGapMs(默认 10min) 视为新时段，重置 activeMs 与 startedAt；
  *   3. 超过末档后按末档步长继续（20/40/60 → 80/100/…）。
  *
- * 另加两条 PRD 未写但绕不开的：
+ * 另加三条 PRD 未写但绕不开的：
  *   4. 页面隐藏时冻结计时（浏览器会节流甚至冻结定时器，累计会失真）；
  *      PRD 把「tab 休眠校正」列为 V1.1，此处只做冻结与切回后的重置判定，
  *      不做反向补算 —— 这是保守方向，不会多算。
- *   5. 时钟回拨（now < 上次 tick）时不累加、不触发。
+ *      **例外：模型正在回答（busy）时不冻结** —— 那是模型在干活、人在等，
+ *      把 DSH 切到后台正是最常见的用法（见 tick 的可见性分支）。
+ *   5. 后台 / 回答期间的单步 tick 封顶：被节流是常态，被睡眠挂起几小时则不能
+ *      整段认成沉浸。
+ *   6. 时钟回拨（now < 上次 tick）时不累加、不触发。
  *
  * @module src/client/timing
  */
 
 /** 一个活跃段达到多久才值得存进画廊（PRD §2.2 F7 的候选门槛）。 */
 const MIN_SAVE_MS = 5 * 60 * 1000;
+
+/**
+ * 后台 / 回答期间单次 tick 最多认多长的间隔。
+ *
+ * 隐藏页的定时器会被浏览器节流到约 1 次/分钟，正常间隔远小于 2 分钟；只有
+ * 系统睡眠这类长时间挂起才会出现更大的空档。那种空档里**没法知道模型是否
+ * 真在跑**，整段认成沉浸会让读数凭空涨一夜 —— 宁可少算，与空闲冻结同取向。
+ */
+const MAX_TICK_STEP_MS = 2 * 60 * 1000;
 
 /**
  * 依据阈值数组算出某一档之后的下一个触发点。
@@ -126,7 +139,12 @@ function tick(params) {
   }
 
   // 页面不可见：冻结。也不改 lastActiveAt —— 切回时由 gap 判定续算还是重置。
-  if (!visible) {
+  //
+  // ⚠ 但「模型正在回答」是例外：这段时间是模型在干活、用户在等，把 DSH 切到
+  // 后台或别的窗口是正常用法。早先这里无条件冻结（连 busy 一起），实测就是
+  // 「发起询问后切走，计时停住」—— 而 busy 当初加进来正是为了回答期间不停表。
+  // 所以可见性判断必须让 busy 先过：忙的时候，后台照常累加。
+  if (!visible && !busy) {
     return { segment, effects: noEffects };
   }
 
@@ -151,7 +169,11 @@ function tick(params) {
   }
 
   // 正常累加：本次 tick 覆盖的步长是「距上次 tick」的间隔。
-  const step = Math.max(0, now - lastTickAt);
+  //
+  // 后台 / 回答期间单步封顶：定时器被节流到 1 次/分钟时步长仍是 60s，不受
+  // 影响；只有睡眠挂起才会出现超出上限的间隔，那部分不补（见 MAX_TICK_STEP_MS）。
+  const rawStep = Math.max(0, now - lastTickAt);
+  const step = visible && !busy ? rawStep : Math.min(rawStep, MAX_TICK_STEP_MS);
   const activeMs = segment.activeMs + step;
   const satisfied = satisfiedCount(thresholdsMin, activeMs);
 

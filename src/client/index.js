@@ -282,39 +282,24 @@ function apply(ctx) {
     };
   }, 'immersion-glow: activity listeners');
 
-  // 多标签同步（PRD §2.4）。defineStore 的 persist 只在创建时读一次、之后单向
-  // 写入，**不监听 storage**，所以这一层必须自己写：单键共享，取更大的 activeMs。
+  // 多窗口同步（PRD §2.4）。defineStore 的 persist 只在创建时读一次、之后单向
+  // **整份**写入同一个键，不监听 storage —— 所以这一层必须自己写。
+  //
+  // 早先这里只把「对方 activeSessionId 那个分区的 activeMs」取最大，再写到本地
+  // 当前会话头上：两个窗口看不同会话时，那是把别人的时长串到自己账上；而且
+  // 谁后写谁赢，对方窗口的会话分区会被整份覆盖抹掉。现在改成按分区合并
+  // （规则见 state.js 的 mergeIncomingSessions），并在有变化时写回，让磁盘上
+  // 的那份也带上并集。
   ctx.effect(() => {
     const onStorage = (event) => {
       if (event.key !== PERSIST_KEY || typeof event.newValue !== 'string') return;
       try {
         const incoming = JSON.parse(event.newValue);
-        // persist 写的是整个 state，所以对方的分区在 sessions[对方 activeSessionId]。
-        const theirId = incoming?.activeSessionId;
-        const theirSeg =
-          typeof theirId === 'string' && incoming?.sessions?.[theirId]
-            ? incoming.sessions[theirId].segment
-            : incoming?.segment;
-        const theirMs = theirSeg?.activeMs;
-        const theirAt = theirSeg?.lastActiveAt;
-        if (!Number.isFinite(theirMs) || !Number.isFinite(theirAt)) return;
-        const local = state();
-        const sessionId = local.activeSessionId;
-        if (!hasSessionBucket(local, sessionId)) return;
-        const localSeg = currentBucket(local).segment;
-        if (theirMs > localSeg.activeMs) {
-          actions.writeSession({
-            sessionId,
-            segment: {
-              ...localSeg,
-              activeMs: theirMs,
-              lastActiveAt: Math.max(localSeg.lastActiveAt, theirAt),
-            },
-            now: Date.now(),
-          });
-        }
+        const merged = mergeIncomingSessions(state(), incoming);
+        // changed=false 必须什么都不做，否则两个窗口会互相触发写回，形成风暴。
+        if (merged.changed) actions.mergeSessions({ sessions: merged.sessions });
       } catch (_error) {
-        // 坏数据忽略，不影响本标签。
+        // 坏数据忽略，不影响本窗口。
       }
     };
     window.addEventListener('storage', onStorage);

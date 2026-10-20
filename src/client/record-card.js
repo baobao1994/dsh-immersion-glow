@@ -177,6 +177,8 @@ function RecordCard(props) {
           notesForModel.length
         : 0;
     const isOpen = noteOpen === key;
+    // provider 单独露出：同名的模型可能来自不同线路，两行不能长得一样。
+    const label = modelLabelParts(entry);
 
     return h(
       'li',
@@ -185,7 +187,14 @@ function RecordCard(props) {
       h(
         'div',
         { class: 'ig-model-head' },
-        h('span', { class: 'ig-model-name' }, modelLabel(entry)),
+        h(
+          'span',
+          { class: 'ig-model-name' },
+          label.name,
+          label.provider === null
+            ? null
+            : h('span', { class: 'ig-model-provider' }, ` · ${label.provider}`),
+        ),
         rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
         h('span', { class: 'ig-model-time' }, formatElapsed(entry.modelMs, t)),
       ),

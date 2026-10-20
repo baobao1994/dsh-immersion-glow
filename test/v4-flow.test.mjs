@@ -32,6 +32,9 @@ const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 function loadBundle(options = {}) {
   let spec = null;
   const storage = new Map();
+  // window 上的监听器要真的记下来：多窗口同步走 storage 事件，不记录就没法
+  // 触发，接线测试会退化成「监听器存在」这种静态断言。
+  const listeners = new Map();
   if (options.persisted !== undefined) {
     storage.set('immersion-glow.v1', JSON.stringify(options.persisted));
   }
@@ -43,8 +46,17 @@ function loadBundle(options = {}) {
   const sandbox = {
     window: {
       __ModuleLoader__: { load: (v) => { spec = v; } },
-      addEventListener: () => {},
-      removeEventListener: () => {},
+      addEventListener: (type, fn) => {
+        const list = listeners.get(type) ?? [];
+        list.push(fn);
+        listeners.set(type, list);
+      },
+      removeEventListener: (type, fn) => {
+        const list = listeners.get(type);
+        if (list === undefined) return;
+        const index = list.indexOf(fn);
+        if (index >= 0) list.splice(index, 1);
+      },
       setInterval: () => 0,
       clearInterval: () => {},
       setTimeout: () => 0,
@@ -72,7 +84,15 @@ function loadBundle(options = {}) {
     console, Date, Math, JSON, Number, Object, Array, Set, Map, RegExp, Symbol, Promise, Error, String, Boolean,
   };
   runInContext(BUNDLE, createContext(sandbox));
-  return { spec, sandbox, storage };
+  return {
+    spec,
+    sandbox,
+    storage,
+    /** 触发某个 window 事件的全部监听器（目前只用于 storage）。 */
+    emit: (type, event) => {
+      for (const fn of listeners.get(type) ?? []) fn(event);
+    },
+  };
 }
 
 /** 宿主投影 key → 测试里用的简写键名。 */
@@ -122,7 +142,18 @@ function boot(snapshots = {}) {
     return element;
   };
 
-  return { instance, actions, selectorHook, probe, layer, runProbe, contribution, provideRootCalls };
+  return {
+    instance,
+    actions,
+    selectorHook,
+    probe,
+    layer,
+    runProbe,
+    contribution,
+    provideRootCalls,
+    /** 触发 window 事件（storage 多窗口同步用）。 */
+    emit: bundle.emit,
+  };
 }
 
 /** 造一份含两条 assistant 调用（分属两个模型）的 chat 快照。 */
@@ -720,6 +751,25 @@ test('汇总页能真正渲染（不抛）—— 覆盖共享 helper 的真实�
   }, '共享 helper 在新签名下必须仍能工作');
 });
 
+test('汇总行显示 provider（同名模型来自不同线路时要能区分）', () => {
+  const env = bootedWithData();
+  env.actions.setSummaryOpen(true);
+
+  const tree = env.layer.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    useSessions: () => undefined,
+    immersionGlowActions: env.actions,
+  });
+  const panel = findByClass(tree, 'ig-panel--wide');
+  assert.ok(panel !== null);
+
+  const text = collectText(panel);
+  assert.ok(text.includes('claude-opus'), '模型名照常显示');
+  assert.ok(text.includes('anthropic'), 'provider 必须露出来，否则同名两行无法区分');
+  assert.ok(findByClass(panel, 'ig-model-provider') !== null, 'provider 走独立的弱化样式');
+});
+
 test('详情面板里的三格指标都渲染出数值', () => {
   const env = bootedWithData();
   env.actions.setMeterOpen(true);
@@ -1215,4 +1265,41 @@ test('活跃时长翻倍时副行数字跟着变小（不是写死的）', () =>
   const at15 = readAt(15);
   assert.ok(at10.includes('10 分钟'), `10 分活跃 → 剩 10 分，实际 ${at10}`);
   assert.ok(at15.includes('5 分钟'), `15 分活跃 → 剩 5 分，实际 ${at15}`);
+});
+
+// ── 多窗口：storage 事件必须真的把对方分区并进来 ─────────────────────
+//
+// 这条测的是**接线**：合并规则由 state 单测覆盖，但若 storage 监听没接上
+// mergeSessions（或写成旧的「取最大 activeMs 盖到本会话」），单测照样全绿。
+
+test('多窗口：storage 事件合并对方分区，且不串改本会话时长', () => {
+  const env = bootedWithData();
+  env.actions.writeSession({
+    sessionId: 's1',
+    segment: { startedAt: 1000, lastActiveAt: 2000, activeMs: 60_000, activeRuns: 1, firedCount: 0 },
+    now: 5000,
+  });
+
+  const incoming = {
+    activeSessionId: 's2',
+    sessions: {
+      // 对方那份 s1 是旧快照（updatedAt 更小），不该覆盖本地。
+      s1: {
+        segment: { startedAt: 1000, lastActiveAt: 1000, activeMs: 999_000, activeRuns: 1, firedCount: 0 },
+        metrics: null, stats: null, models: [], taskName: null, currentModel: null, busy: false, updatedAt: 1,
+      },
+      // 本窗口从未见过的会话 s2：必须收下，否则关掉那个窗口就丢了。
+      s2: {
+        segment: { startedAt: 1000, lastActiveAt: 1000, activeMs: 300_000, activeRuns: 0, firedCount: 0 },
+        metrics: null, stats: null, models: [], taskName: null, currentModel: null, busy: false, updatedAt: 9000,
+      },
+    },
+  };
+
+  env.emit('storage', { key: 'immersion-glow.v1', newValue: JSON.stringify(incoming) });
+
+  const snapshot = env.instance.getSnapshot();
+  assert.ok(snapshot.sessions.s2 !== undefined, '另一窗口的会话分区应合并进 store');
+  assert.equal(snapshot.sessions.s2.segment.activeMs, 300_000);
+  assert.equal(snapshot.sessions.s1.segment.activeMs, 60_000, '不能把 s2 的时长串到 s1 头上');
 });

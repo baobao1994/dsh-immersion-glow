@@ -224,3 +224,30 @@ function modelLabel(entry) {
   if (provider.length === 0) return model;
   return model;
 }
+
+/**
+ * 把模型拆成「名字」与「provider」两段，给需要区分同名模型的列表用。
+ *
+ * ## 为什么单靠 modelLabel 不够
+ *
+ * 同一个模型可以经不同 provider 接入（`opencode-go/deepseek-v4.1-flash` 与
+ * `workbuddy/deepseek-v4.1-flash`）。它们的 key 不同、耗时也分别记账，
+ * 但 modelLabel **刻意省略 provider** —— 于是汇总排行里会出现两行一模一样的
+ * `deepseek-v4.1-flash`：看起来像同一行重复渲染，也分不清哪条是刚才用的线路。
+ *
+ * 列表场景必须能区分，所以这里把 provider 单独拎出来由 UI 以弱化样式附着在
+ * 名字后面。名字本身仍由 modelLabel 决定（保持已有省略规则一致）。
+ *
+ * provider 为空、或与展示名相同时返回 null —— 那种情况下再挂一遍是纯噪音。
+ *
+ * @param entry - { provider, model }。
+ * @returns {{ name: string, provider: string | null }} provider 为 null 表示无需展示。
+ */
+function modelLabelParts(entry) {
+  const name = modelLabel(entry);
+  const raw = entry !== null && entry !== undefined && typeof entry.provider === 'string'
+    ? entry.provider.trim()
+    : '';
+  if (raw.length === 0 || raw === name) return { name, provider: null };
+  return { name, provider: raw };
+}

@@ -392,6 +392,67 @@ test('隐藏很久后切回：按 gap 判重置（不反向补算）', () => {
   assert.equal(result.segment.activeMs, 0, '不把隐藏期间当作活跃时长');
 });
 
+// 实测 bug（用户反馈）：发起询问后把 DSH 切到后台 / 别的窗口，计时就停住。
+// 根因是这里先判 !visible 直接冻结，busy 根本没机会生效 —— 而 busy 当初加进来
+// 就是为了「模型回答期间不停表」。隐藏期间模型在干活，用户只是在等。
+test('页面隐藏但模型在回答：继续累加（切后台等回答是正常用法）', () => {
+  const t0 = 1_000_000;
+  const segment = { ...seg(t0), activeMs: 5 * 60000, lastActiveAt: t0 };
+
+  const result = TIMING.tick({
+    segment,
+    now: t0 + 60_000,
+    lastTickAt: t0,
+    visible: false,
+    busy: true,
+    ...DEFAULTS,
+  });
+
+  assert.equal(result.segment.activeMs, 5 * 60000 + 60_000, '后台回答期间照样计时');
+  assert.equal(result.segment.lastActiveAt, t0 + 60_000, '作者期间刷新活跃点，回来不立刻判空闲');
+  assert.equal(result.effects.reset, false);
+});
+
+test('后台回答超过重置阈值：不判新时段，越过档位照样触发', () => {
+  const t0 = 1_000_000;
+  const segment = { ...seg(t0), activeMs: 19 * 60000, lastActiveAt: t0 };
+
+  // 隐藏 12 分钟（> 10 分钟重置阈值），模型一直在跑。
+  const result = TIMING.tick({
+    segment,
+    now: t0 + 12 * 60_000,
+    lastTickAt: t0 + 1000,
+    visible: false,
+    busy: true,
+    ...DEFAULTS,
+  });
+
+  assert.equal(result.effects.reset, false, '回答中不打断连续时段');
+  // 单步封顶 2 分钟：这 12 分钟里只有 2 分钟被认（见 MAX_TICK_STEP_MS）。
+  assert.equal(result.segment.activeMs, 21 * 60000);
+  assert.equal(result.effects.fire.count, 1, '跨过 20 分钟档应触发提醒');
+});
+
+test('单步封顶：睡眠挂起的几小时不会整段算成沉浸', () => {
+  const t0 = 1_000_000;
+  const segment = { ...seg(t0), activeMs: 60_000, lastActiveAt: t0 };
+
+  const result = TIMING.tick({
+    segment,
+    now: t0 + 3 * 60 * 60_000,
+    lastTickAt: t0,
+    visible: false,
+    busy: true,
+    ...DEFAULTS,
+  });
+
+  assert.equal(
+    result.segment.activeMs,
+    60_000 + TIMING.MAX_TICK_STEP_MS,
+    '只认封顶的那一段，其余丢弃（宁可少算）',
+  );
+});
+
 // ── 时钟异常 ───────────────────────────────────────────────────────────
 test('时钟回拨：不累加、不触发', () => {
   const t0 = 1_000_000;

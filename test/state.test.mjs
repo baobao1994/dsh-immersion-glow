@@ -521,3 +521,118 @@ test('emptyBucket 默认 busy=false，writeSession 可写入 busy', () => {
   actions.writeSession({ sessionId: 's', busy: false, now: 3 });
   assert.equal(draft.sessions.s.busy, false, 'busy 可写回 false');
 });
+
+// ── 多窗口合并（ADR-143）─────────────────────────────────────────────
+//
+// persist 是整份 state 写同一个键。两个窗口各有一份内存快照，谁后写谁赢 ——
+// 对方的会话分区会被抹掉。合并逻辑必须同时满足：
+//   - 不丢對方独有分区；
+//   - 不把对方会话的时长串到本会话头上（旧实现的真 bug）；
+//   - 两边都在同一会话计时时取大，不回退；
+//   - 没变化就不写（否则两个窗口互相触发写回，形成风暴）。
+
+/** 造一份会话分区，只填合并逻辑关心的字段。 */
+function bucketOf({
+  activeMs = 0,
+  activeRuns = 0,
+  firedCount = 0,
+  startedAt = 1000,
+  lastActiveAt = 1000,
+  updatedAt = 0,
+} = {}) {
+  return {
+    segment: { startedAt, lastActiveAt, activeMs, activeRuns, firedCount },
+    metrics: null,
+    stats: null,
+    models: [],
+    taskName: null,
+    currentModel: null,
+    busy: false,
+    updatedAt,
+  };
+}
+
+test('mergeIncomingSessions：对方独有的会话分区不能丢', () => {
+  const local = { activeSessionId: 'a', sessions: { a: bucketOf({ activeMs: 60_000, updatedAt: 500 }) } };
+  const incoming = {
+    activeSessionId: 'b',
+    sessions: { b: bucketOf({ activeMs: 900_000, updatedAt: 900 }), a: bucketOf({ activeMs: 60_000, updatedAt: 400 }) },
+  };
+
+  const merged = STATE.mergeIncomingSessions(local, incoming);
+  assert.equal(merged.changed, true);
+  assert.ok(merged.sessions.b !== undefined, '对方窗口的会话应并进来');
+  assert.equal(merged.sessions.b.segment.activeMs, 900_000);
+  assert.equal(merged.sessions.a.segment.activeMs, 60_000, '本地更新的分区不被旧快照覆盖');
+});
+
+test('mergeIncomingSessions：不同会话的时长绝不串账（旧实现真 bug）', () => {
+  const local = { activeSessionId: 'a', sessions: { a: bucketOf({ activeMs: 60_000, updatedAt: 500 }) } };
+  // 对方在 b 会话上跑了 16 分钟，且它那份状态里没有 a（或 a 很旧）。
+  const incoming = { activeSessionId: 'b', sessions: { b: bucketOf({ activeMs: 999_000, updatedAt: 900 }) } };
+
+  const merged = STATE.mergeIncomingSessions(local, incoming);
+  assert.equal(merged.sessions.a.segment.activeMs, 60_000, 'a 的时长不能被 b 的顶上去');
+  assert.equal(merged.sessions.b.segment.activeMs, 999_000);
+});
+
+test('mergeIncomingSessions：同一会话两边都在计时 → 取较大值，不回退', () => {
+  const local = {
+    activeSessionId: 'a',
+    sessions: { a: bucketOf({ activeMs: 60_000, firedCount: 0, updatedAt: 700, lastActiveAt: 8000 }) },
+  };
+  const incoming = {
+    activeSessionId: 'a',
+    sessions: { a: bucketOf({ activeMs: 90_000, firedCount: 1, updatedAt: 900, lastActiveAt: 9000 }) },
+  };
+
+  const merged = STATE.mergeIncomingSessions(local, incoming);
+  assert.equal(merged.changed, true);
+  assert.equal(merged.sessions.a.segment.activeMs, 90_000, '取大，不能回退到 60s');
+  assert.equal(merged.sessions.a.segment.firedCount, 1);
+  assert.equal(merged.sessions.a.segment.lastActiveAt, 9000);
+  assert.equal(merged.sessions.a.updatedAt, 900, '非 segment 字段用较新的那份');
+});
+
+test('mergeIncomingSessions：内容没变时 changed=false（防写回风暴）', () => {
+  const bucket = bucketOf({ activeMs: 60_000, updatedAt: 500 });
+  const local = { activeSessionId: 'a', sessions: { a: bucketOf({ activeMs: 60_000, updatedAt: 500 }), z: bucket } };
+  const incoming = { activeSessionId: 'a', sessions: { a: bucketOf({ activeMs: 60_000, updatedAt: 500 }), z: bucket } };
+
+  const merged = STATE.mergeIncomingSessions(local, incoming);
+  assert.equal(merged.changed, false, '同一个值反复合并不该产生新的写入');
+  assert.equal(merged.sessions.a.segment.activeMs, 60_000);
+});
+
+test('mergeIncomingSessions：畸形输入不抛，按无变化处理', () => {
+  const local = { activeSessionId: 'a', sessions: { a: bucketOf({ activeMs: 1 }) } };
+  for (const incoming of [
+    null,
+    {},
+    { sessions: null },
+    { sessions: [] },
+    { sessions: { a: null } },
+    // 缺 segment 的分区：收进来会害 tick 下一帧读到 undefined，必须丢掉。
+    { sessions: { x: { updatedAt: 9999, models: [] } } },
+  ]) {
+    const merged = STATE.mergeIncomingSessions(local, incoming);
+    assert.equal(merged.changed, false);
+    assert.equal(merged.sessions.a.segment.activeMs, 1);
+    assert.equal(merged.sessions.x, undefined, '缺 segment 的分区不该被收下');
+  }
+});
+
+test('mergeSessions：用合并后的表替换本地 sessions', () => {
+  const draft = draftOf();
+  const actions = bindActions(draft);
+  actions.switchSession({ sessionId: 'a', now: 1 });
+  actions.mergeSessions({
+    sessions: {
+      a: bucketOf({ activeMs: 1000, updatedAt: 2 }),
+      b: bucketOf({ activeMs: 2000, updatedAt: 3 }),
+    },
+  });
+  assert.equal(draft.sessions.a.segment.activeMs, 1000);
+  assert.equal(draft.sessions.b.segment.activeMs, 2000, '对方的分区应落地到 store');
+  assert.equal(draft.activeSessionId, 'a', '合并不改当前视角');
+});

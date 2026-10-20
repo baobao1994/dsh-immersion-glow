@@ -136,6 +136,9 @@ function Summary(props) {
       notes.length > 0
         ? notes.reduce((sum, item) => sum + (Number.isFinite(item.rating) ? item.rating : 0), 0) / notes.length
         : 0;
+    // 同一模型名可能来自不同 provider（key 不同、分别记账）。modelLabel 会省略
+    // provider，于是两行长得一模一样 —— 汇总里必须把 provider 露出来才分得清。
+    const label = modelLabelParts(entry);
 
     return h(
       'li',
@@ -143,7 +146,14 @@ function Summary(props) {
       h(
         'div',
         { class: 'ig-summary-row-head' },
-        h('span', { class: 'ig-summary-row-name' }, modelLabel(entry)),
+        h(
+          'span',
+          { class: 'ig-summary-row-name' },
+          label.name,
+          label.provider === null
+            ? null
+            : h('span', { class: 'ig-model-provider' }, ` · ${label.provider}`),
+        ),
         rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
         h('span', { class: 'ig-summary-row-time' }, formatDuration(entry.modelMs, t)),
       ),

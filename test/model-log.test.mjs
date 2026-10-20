@@ -24,7 +24,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // model-log.js 依赖 tags.js 之外没有别的模块；session-log.js 同理。
 const { deriveModelEntries, modelEntriesFromArray, modelEntriesToArray, mergeModelEntries, isTaskStarted } =
   loadModules(['session-log.js', 'model-log.js']);
-const { firstTaskName, normalizeSessionStats, normalizeModelSelection, normalizeTokenUsage, modelLabel } =
+const { firstTaskName, normalizeSessionStats, normalizeModelSelection, normalizeTokenUsage, modelLabel, modelLabelParts } =
   loadModules(['session-log.js']);
 
 /** 造一个带 timing 的 assistant 节点。 */
@@ -341,6 +341,38 @@ test('modelLabel：provider 与 model 同名时不重复显示', () => {
   assert.equal(modelLabel({ provider: 'deepseek', model: 'deepseek/deepseek-chat' }), 'deepseek-chat');
   assert.equal(modelLabel({ provider: 'anthropic', model: 'claude-opus' }), 'claude-opus');
   assert.equal(modelLabel(null), '');
+});
+
+test('modelLabelParts：同名模型来自不同 provider 时必须能区分', () => {
+  // 汇总里真实出现过的两条：key 不同、耗时分别记账，但名字一样。
+  const a = modelLabelParts({ provider: 'opencode-go', model: 'deepseek-v4.1-flash' });
+  const b = modelLabelParts({ provider: 'workbuddy', model: 'deepseek-v4.1-flash' });
+  // 对象来自沙箱 realm，deepEqual 会因原型不同而报错 —— 逐字段断言。
+  assert.equal(a.name, 'deepseek-v4.1-flash');
+  assert.equal(a.provider, 'opencode-go');
+  assert.equal(b.name, 'deepseek-v4.1-flash');
+  assert.equal(b.provider, 'workbuddy');
+  assert.notEqual(a.provider, b.provider, '两行不能长得一样');
+});
+
+test('modelLabelParts：provider 无信息量时不给后缀', () => {
+  // provider 与展示名相同 → 再挂一遍是纯噪音。
+  const same = modelLabelParts({ provider: 'deepseek', model: 'deepseek' });
+  assert.equal(same.name, 'deepseek');
+  assert.equal(same.provider, null);
+
+  // 空 provider / 缺字段 / 非对象：退回纯名字，不抛。
+  for (const entry of [
+    { provider: '', model: 'gpt-x' },
+    { provider: '  ', model: 'gpt-x' },
+    { model: 'gpt-x' },
+    null,
+  ]) {
+    const parts = modelLabelParts(entry);
+    assert.equal(parts.provider, null);
+  }
+  assert.equal(modelLabelParts({ provider: '', model: 'gpt-x' }).name, 'gpt-x');
+  assert.equal(modelLabelParts(null).name, '');
 });
 // ── 归属记忆：换模型后旧账不会被重新归给新模型（v4 修的真实 bug）──
 //

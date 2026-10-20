@@ -960,6 +960,16 @@ const PANEL_CSS = `/* ── 记录卡 / 画廊的公共面板 ─────�
   white-space: nowrap;
 }
 
+/*
+ * provider 后缀：同一个模型可以经不同线路接入（key 不同、分别记账），
+ * 只显示模型名会让列表中两行完全一样。弱化成注释大小，不跟名字抢。
+ */
+.ig-model-provider {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.8));
+}
+
 .ig-model-time {
   font-size: 13px;
   line-height: 19px;

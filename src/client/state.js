@@ -401,6 +401,26 @@ function createActions() {
     },
 
     /**
+     * 用合并后的会话表替换本地 sessions（多窗口共存）。
+     *
+     * 为什么需要：persist 是**整份 state 写同一个 localStorage 键**。两个窗口
+     * 各有一份内存快照，谁后写谁的算 —— 对方窗口的会话分区就被抹掉；关掉那个
+     * 窗口后，它的时长/模型明细永久丢失。合并由 `mergeIncomingSessions` 算好，
+     * 这里只负责落地，让下一次 persist 带上并集。
+     *
+     * 只合并 sessions：settings / 收藏 / 自评的冲突没有可靠的时序证据（没有
+     * 逐字段 revision），强行合并会造出「谁的设置赢」的随机结果，比现在更糟。
+     *
+     * @param draft - immer draft。
+     * @param payload - { sessions } 合并后的分区表。
+     */
+    mergeSessions(draft, payload) {
+      const sessions = payload?.sessions;
+      if (sessions === null || typeof sessions !== 'object' || Array.isArray(sessions)) return;
+      draft.sessions = sessions;
+    },
+
+    /**
      * 记「此刻在用哪个模型」。
      *
      * 与 models 的分工：这里是**当下**（记录卡顶部那行模型名、下一次请求会用
@@ -810,6 +830,106 @@ function hasSessionBucket(snapshot, sessionId) {
   const sessions = snapshot === null || snapshot === undefined ? undefined : snapshot.sessions;
   if (sessions === null || typeof sessions !== 'object') return false;
   return sessions[sessionId] !== undefined;
+}
+
+/**
+ * 把另一个窗口写入的 sessions 表并进本地。
+ *
+ * ## 为什么必须合并，而不是「取最大 activeMs」
+ *
+ * 旧实现只把对方 activeSessionId 那个分区的 activeMs 取最大，再写到**本地
+ * 当前会话**头上。两个窗口看不同会话时（本机常见用法），这等于把对方的时长
+ * 串到本会话 —— 数字会莫名跳一大截。而且 persist 是整份覆盖，对方写得晚就
+ * 把它的另一个会话分区抹掉了。
+ *
+ * ## 规则
+ *
+ * 1. 只在对方有、本地没有 → 收下。
+ * 2. 两边都停在**同一个会话**上 → 这个 segment 是两个计时器共同产出的：
+ *    activeMs / activeRuns / firedCount / lastActiveAt 取大，startedAt 取小；
+ *    其余字段用 updatedAt 更新的那份。否则后写的一方每写一次，这边的读数就
+ *    回退一秒。
+ * 3. 其余会话各自独立计时 → 谁的 updatedAt 新用谁。正在被使用的窗口每秒都会
+ *    刷新 updatedAt，所以「新」就等于「仍在被用」。
+ *
+ * `changed === false` 时调用方必须**什么都不做**：两个窗口都会收到 storage
+ * 事件，若每次都写回，就会互相触发、形成无休止的写回风暴。
+ *
+ * @param local - 本地 state（读 sessions / activeSessionId）。
+ * @param incoming - 另一窗口写入的 state（可能是旧版形状）。
+ * @returns {{ sessions: object, changed: boolean }} 合并后的分区表与是否有变化。
+ */
+function mergeIncomingSessions(local, incoming) {
+  const num = (value) => (Number.isFinite(value) ? value : 0);
+  const tableOf = (value) =>
+    value !== null && typeof value === 'object' &&
+    value.sessions !== null && typeof value.sessions === 'object' && !Array.isArray(value.sessions)
+      ? value.sessions
+      : null;
+  const hasSegment = (bucket) => bucket.segment !== null && typeof bucket.segment === 'object';
+
+  const localSessions = tableOf(local) ?? {};
+  const incomingSessions = tableOf(incoming);
+  if (incomingSessions === null) return { sessions: localSessions, changed: false };
+
+  const localActive = typeof local?.activeSessionId === 'string' ? local.activeSessionId : null;
+  const incomingActive = typeof incoming?.activeSessionId === 'string' ? incoming.activeSessionId : null;
+
+  const sessions = { ...localSessions };
+  let changed = false;
+
+  for (const id of Object.keys(incomingSessions)) {
+    const theirs = incomingSessions[id];
+    if (theirs === null || typeof theirs !== 'object') continue;
+    const ours = localSessions[id];
+
+    if (ours === null || typeof ours !== 'object') {
+      // segment 缺失的分区只会让 tick 在下一帧读到 undefined 而抛 —— 宁可少收
+      // 一个坏分区，也不能让它顶掉输入框插槽。
+      if (!hasSegment(theirs)) continue;
+      sessions[id] = theirs;
+      changed = true;
+      continue;
+    }
+
+    // 规则 2：两边都停在这个会话上 —— 合并两个计时器的产出。
+    if (id === localActive && id === incomingActive) {
+      const a = ours.segment !== null && typeof ours.segment === 'object' ? ours.segment : {};
+      const b = theirs.segment !== null && typeof theirs.segment === 'object' ? theirs.segment : {};
+      const startedA = num(a.startedAt);
+      const startedB = num(b.startedAt);
+      const segment = {
+        ...a,
+        ...b,
+        activeMs: Math.max(num(a.activeMs), num(b.activeMs)),
+        activeRuns: Math.max(num(a.activeRuns), num(b.activeRuns)),
+        firedCount: Math.max(num(a.firedCount), num(b.firedCount)),
+        lastActiveAt: Math.max(num(a.lastActiveAt), num(b.lastActiveAt)),
+        startedAt: startedA === 0 ? startedB : startedB === 0 ? startedA : Math.min(startedA, startedB),
+      };
+      const source = num(theirs.updatedAt) > num(ours.updatedAt) ? theirs : ours;
+      const unchanged =
+        source === ours &&
+        segment.activeMs === num(a.activeMs) &&
+        segment.activeRuns === num(a.activeRuns) &&
+        segment.firedCount === num(a.firedCount) &&
+        segment.lastActiveAt === num(a.lastActiveAt) &&
+        segment.startedAt === num(a.startedAt);
+      if (!unchanged) {
+        sessions[id] = { ...source, segment };
+        changed = true;
+      }
+      continue;
+    }
+
+    // 规则 3：不同会话各自计时，更新时间新的那份更接近现状。
+    if (num(theirs.updatedAt) > num(ours.updatedAt) && hasSegment(theirs)) {
+      sessions[id] = theirs;
+      changed = true;
+    }
+  }
+
+  return { sessions, changed };
 }
 
 /**

@@ -277,6 +277,8 @@ function CornerMeter(props) {
         ? notes.reduce((sum, item) => sum + (Number.isFinite(item?.rating) ? item.rating : 0), 0) /
           notes.length
         : 0;
+    // 同模型不同 provider 是两条账，列表里要能区分（见 modelLabelParts）。
+    const label = modelLabelParts(entry);
 
     return h(
       'li',
@@ -285,7 +287,14 @@ function CornerMeter(props) {
       h(
         'div',
         { class: 'ig-hud-row-head' },
-        h('span', { class: 'ig-hud-row-model' }, modelLabel(entry)),
+        h(
+          'span',
+          { class: 'ig-hud-row-model' },
+          label.name,
+          label.provider === null
+            ? null
+            : h('span', { class: 'ig-model-provider' }, ` · ${label.provider}`),
+        ),
         rating > 0 ? h('span', { class: 'ig-model-rating' }, ratingText(rating, t)) : null,
         h('span', { class: 'ig-hud-row-time' }, formatElapsed(entry.modelMs, t)),
       ),
