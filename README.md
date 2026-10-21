@@ -5,7 +5,7 @@
 **一个不打扰你的时间觉察助手。**
 它只在右上角呼吸；到点了，才开口叫你歇一会儿。
 
-[![npm version](https://img.shields.io/badge/npm-0.1.0-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
+[![npm version](https://img.shields.io/badge/npm-0.1.1-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org)
 [![tests](https://img.shields.io/badge/tests-288%20passing-brightgreen)](test/)
@@ -53,9 +53,12 @@
 
 ```
 ● 40 分钟 · 该歇了
-起来走两步，或者看向 6 米外 20 秒。
+起来走走，看看六米外的东西。
 [好，歇一下]  [先记着]            42s
 ```
+
+正文**按时段和次数换**：白天是「起来走走」，深夜是「该停下来了。屏幕不会跑，明天再改」；
+同一时段内按提醒次数轮换，不会连着两次说同一句。卡头始终是「40 分钟 · 该歇了」——那是识别符号，不随文案变。
 
 主按钮是**「好，歇一下」**，不是"给我看看数据"——重点不是让你继续盯着屏幕。
 按下去进入 20 秒休息态（7 秒一次的长呼气）；按「先记着」则不打断你。没理它，暖点会一直亮着：

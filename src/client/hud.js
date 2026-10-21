@@ -170,6 +170,11 @@ function CornerMeter(props) {
   // 颜色变化留给「到点」那一次，否则整个小时都在变色，反而没人注意得到。
   const heat = Math.min(1, Math.max(0, progress.ratio));
 
+  // 提醒卡正文：时段决定动作（白天起来走，深夜去睡），次数决定说哪一条。
+  // impressions 在弹出前自增，所以减一才是「第几次」的 0 基序号。
+  const alertSeq = Math.max(0, Number(snapshot.telemetry?.impressions ?? 1) - 1);
+  const alertLine = reminderLine(new Date().getHours(), alertSeq);
+
   const activeModel = currentModel === null || currentModel === undefined ? null : currentModel;
   const modelName = activeModel === null ? t('hud.noModel') : modelLabel(activeModel);
   const list = Array.isArray(entries) ? entries : [];
@@ -283,7 +288,7 @@ function CornerMeter(props) {
       'div',
       { class: 'ig-hud-card', role: 'alert' },
       row('alert'),
-      h('p', { class: 'ig-hud-card-body' }, t('hud.alert.card.body')),
+      h('p', { class: 'ig-hud-card-body' }, t(alertLine.key)),
       h(
         'div',
         { class: 'ig-hud-card-actions' },

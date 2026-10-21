@@ -51,6 +51,8 @@ const MODULES = [
   'panel-css.js',
   'styles.js',
   'reminder.js',
+  // 提醒正文的时段分档 + 轮换，hud.js 用
+  'reminder-copy.js',
   'safe-top.js',
   'hud.js',
   // summary.js 必须早于 record-card.js —— 后者复用前者的 rankModels 算

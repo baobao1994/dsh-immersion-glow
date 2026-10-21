@@ -5,7 +5,7 @@
 **A quiet time-awareness companion for DeepSeek Harness.**
 It breathes in the corner; when you have sat too long, it says one thing: step away.
 
-[![npm version](https://img.shields.io/badge/npm-0.1.0-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
+[![npm version](https://img.shields.io/badge/npm-0.1.1-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org)
 [![tests](https://img.shields.io/badge/tests-288%20passing-brightgreen)](test/)
@@ -53,9 +53,14 @@ breathing stops and a warm card grows in the same corner:
 
 ```
 ● 40 min · time to step away
-Stand up and walk a little, or look 6 m away for 20 s.
+Stand up and look at something 6 m away.
 [Take a break]  [Later]            42s
 ```
+
+The line **changes with the hour and rotates**: daytime asks you to stand up, late night tells you to
+stop — "Stop here. The screen will wait until tomorrow." Within a bucket it rotates by reminder count,
+so two consecutive alerts never say the same thing. The heading stays fixed: it is the product's
+signature, not copy.
 
 The primary action is **Take a break**, not "show me the numbers". Taking it starts a 20-second rest
 (a slower 7-second exhale). Later dismisses without interrupting. Miss it and the ember stays lit.

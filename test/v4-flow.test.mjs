@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
-import { collectText, fakeReact, fakeStoreModule, findAllByClass, findByClass, makeFakeCtx } from './helpers.mjs';
+import { collectText, fakeReact, fakeStoreModule, findAllByClass, findByClass, loadModule, makeFakeCtx } from './helpers.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 execFileSync(process.execPath, [join(ROOT, 'tools', 'build-client.mjs')], { stdio: 'ignore' });
@@ -754,7 +754,12 @@ test('提醒让读数长成一张小暖卡，而不是给同一个药丸换个�
   assert.ok(findByClass(card, 'ig-ember--alert') !== null, '暖点应进入提醒态（停止呼吸）');
   assert.ok(findByClass(card, 'ig-hud-count') !== null, '卡片应显示倒计时');
   const text = collectText(card);
-  assert.ok(text.includes('起来走两步'), `卡片应给一个可执行的动作，实际：${text}`);
+  // 正文按时段轮换，所以断言「是 12 条里的一条」，而不是某一句固定的文案。
+  const dict = loadModule('dict.js');
+  const lines = ['night', 'morning', 'day', 'evening'].flatMap((bucket) =>
+    [1, 2, 3].map((n) => dict.ZH[`hud.alert.line.${bucket}.${n}`]),
+  );
+  assert.ok(lines.some((line) => text.includes(line)), `卡片应给一个可执行的动作，实际：${text}`);
   assert.ok(text.includes('好，歇一下'), '主操作应该是「歇一下」，不是「看明细」');
 });
 
