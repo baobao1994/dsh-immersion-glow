@@ -43,9 +43,12 @@
  * **一路往上推** —— 用户连着三轮反馈「越来越高」，我才发现方向弄反了。
  * 留下这行注释就是为了不再犯：要下来就**加大**这个数。
  *
- * 20px 让落点明确在对话区内部，而不是贴着头部下沿那条分隔线。
+ * 12px：刚好离开头部下沿那条分隔线，又不至于让它看起来「悬在半空」。
+ * 旧值是 20 —— 那时药丸里有一个 44px 的圆环，整体 54px 高，20px 的间隙占不到
+ * 高度的四成；换成 31px 的细药丸之后，同样的 20px 显得整条往下掉了。
+ * 视觉间距要跟着元素的「体量」走，而不是钉死一个数字。
  */
-const EDGE_GAP = 20;
+const EDGE_GAP = 12;
 
 /**
  * 测量防抖时长（ms）。
@@ -127,6 +130,16 @@ function measureSafeTop(root, doc) {
     // 只看有子节点的容器：叶子节点多半是按钮或图标。
     if (typeof node.childElementCount === 'number' && node.childElementCount === 0) continue;
 
+    // ⚠ 跳过本插件自己的节点。
+    //
+    // 测量扫的是 body 下所有 div：插件的面板宽 340、高几百，在窄窗口里
+    // （视口 40% < 340）完全符合「又宽又靠上」的判据，于是会把**自己的面板**
+    // 当成头部，量出「面板下沿 + 间距」写回变量 —— 面板再跟着往下移，形成
+    // 正反馈。表现就是「位置莫名越来越靠下」。插件的类名统一带 ig- 前缀，
+    // 这一条判据比任何几何阈值都可靠。
+    const className = typeof node.className === 'string' ? node.className : '';
+    if (/(^|\s)ig-/.test(className)) continue;
+
     let rect;
     try {
       rect = node.getBoundingClientRect();
@@ -137,8 +150,13 @@ function measureSafeTop(root, doc) {
     if (!Number.isFinite(rect.width) || rect.width < vw * 0.4) continue;
     // 必须贴着顶端：离顶端太远的不是头部。
     if (!Number.isFinite(rect.top) || rect.top > vh * 0.2) continue;
-    // 高度上限：占到半屏的多半是内容容器而不是头部。
-    if (!Number.isFinite(rect.height) || rect.height < 20 || rect.height >= vh * 0.5) continue;
+    // 高度窗口：头部是 40–140px 的一条。
+    // 下限 32 排掉标题行/按钮行这类内部小包装层；上限 140 排掉消息容器 ——
+    // 旧版上限是半屏（vh/2），一段只有几百字的消息组也能混进来，
+    // 一旦它被选中，读数就会掉到对话区中间。
+    if (!Number.isFinite(rect.height) || rect.height < 32 || rect.height > 140) continue;
+    // 头部一定在上三分之一里。
+    if (!Number.isFinite(rect.bottom) || rect.bottom > vh * 0.35) continue;
 
     const bottom = rect.bottom;
     if (Number.isFinite(bottom) && bottom > best) best = bottom;

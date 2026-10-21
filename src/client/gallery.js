@@ -67,11 +67,12 @@ function Gallery(props) {
           'span',
           { className: 'ig-row-sub' },
           [
+            // 一行副信息只放「多久 · 哪个模型 · 什么时段」。
+            // 轮次留给记录卡：塞进来会让这一行在 340px 里被截成省略号。
             formatDuration(item.activeMs, t),
             Array.isArray(item.models) && item.models.length > 0
               ? item.models.map((entry) => modelLabel(entry)).join(' · ')
               : null,
-            t('card.turns') + ' ' + (Number.isFinite(item.turns) ? item.turns : 0),
             tags.map((id) => t(`tag.${id}`)).join(' · '),
           ]
             .filter((piece) => piece !== null && String(piece).length > 0)

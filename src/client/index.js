@@ -10,7 +10,7 @@
  *     ├─ 计时器 / 交互监听 / 多标签同步 / 可见性（全部经 ctx.effect）
  *     └─ 三处 ctx.slots.inject(key, () => ctx.slots.register(...))
  *          ① shell.overlay            (root)    记录卡 + 画廊 + 右上角提醒卡
- *          ② settings.general.item    (root)    设置行
+ *          ② settings.section         (root)    设置页（设置导航里的一页）
  *          ③ conversation.input.left  (session) 探针（默认 null）
  *
  * provideRoot 的 root 贡献会被合并进**所有 scope** 的 standard props，所以三处
@@ -256,11 +256,20 @@ function apply(ctx) {
       const sessionId = snapshot.activeSessionId;
       if (!hasSessionBucket(snapshot, sessionId)) return;
       const now = Date.now();
-      actions.writeSession({
-        sessionId,
-        segment: noteActivity(currentBucket(snapshot).segment, now, snapshot.settings.idleTimeoutMs),
+      const before = currentBucket(snapshot).segment;
+      const next = noteActivity(
+        before,
         now,
-      });
+        snapshot.settings.idleTimeoutMs,
+        snapshot.settings.resetGapMs,
+      );
+      actions.writeSession({ sessionId, segment: next, now });
+
+      // 这次输入结束了一段「安静」：如果它够 60 秒（且 tick 判定过可见、模型空闲），
+      // 记一次「停」。累计数放在 telemetry（跨会话），不随会话清理丢失。
+      if (next.stopRuns > (before.stopRuns ?? 0)) {
+        actions.countStop({ gapMs: now - before.lastActiveAt });
+      }
     };
     const onMove = () => {
       const now = Date.now();

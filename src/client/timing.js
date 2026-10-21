@@ -25,6 +25,23 @@
  * @module src/client/timing
  */
 
+/**
+ * 一次「停」的最小输入间隔（毫秒）。
+ *
+ * ## 「看到了没点」算什么
+ *
+ * 提醒弹出后有两种完全不同的情况：看到了但正处在关键处（不想丢上下文），或者
+ * 压根没看到。**「看」是观测不到的**，所以这个指标不去判断它。
+ *
+ * 我们只数能观测到的事实：**连续 60 秒没有任何输入**（且页面可见、模型不在
+ * 回答）。点了「歇一下」但接着打字 —— 只有承诺，不算；没点任何按钮但走开了
+ * 60 秒 —— 休息真的发生了，照样算。
+ *
+ * 这就是「按钮是承诺，安静是证据」。也是为什么 UI 里不显示「继续」：那是默认
+ * 行为，不是失败。
+ */
+const STOP_MIN_MS = 60 * 1000;
+
 /** 一个活跃段达到多久才值得存进画廊（PRD §2.2 F7 的候选门槛）。 */
 const MIN_SAVE_MS = 5 * 60 * 1000;
 
@@ -86,6 +103,16 @@ function createSegment(now) {
     activeMs: 0,
     activeRuns: 0,
     firedCount: 0,
+    /** 本段内「停下 ≥ STOP_MIN_MS」的次数。 */
+    stopRuns: 0,
+    /** 最长的一次停下（毫秒）。 */
+    longestStopMs: 0,
+    /**
+     * tick 侧的判定：本段当前的安静是否已经够 60 秒、且发生在「可见 + 模型空闲」
+     * 的条件下。由 tick 置位、由 noteActivity 消费并清零 —— 这样「等模型跑」与
+     * 「页面在后台」这两类安静就不会被算成休息。
+     */
+    stopQualified: false,
   };
 }
 
@@ -101,12 +128,23 @@ function createSegment(now) {
  * @param idleTimeoutMs - 空闲阈值。
  * @returns 新的 segment（不改原对象）。
  */
-function noteActivity(segment, now, idleTimeoutMs) {
-  const wasIdle = now - segment.lastActiveAt > idleTimeoutMs;
+function noteActivity(segment, now, idleTimeoutMs, resetGapMs) {
+  const gap = now - segment.lastActiveAt;
+  const wasIdle = gap > idleTimeoutMs;
+
+  // 一次「停」：tick 已经认定这段安静够 60 秒（可见 + 模型空闲），且这次间隔
+  // 没有长到要开新时段（超过 resetGapMs 的空档属于「走了」，不是「歇了」）。
+  const limit = Number.isFinite(resetGapMs) && resetGapMs > 0 ? resetGapMs : Infinity;
+  const stopped = segment.stopQualified === true && gap >= STOP_MIN_MS && gap <= limit;
+
   return {
     ...segment,
     lastActiveAt: now,
     activeRuns: wasIdle ? segment.activeRuns + 1 : segment.activeRuns,
+    stopRuns: stopped ? (segment.stopRuns ?? 0) + 1 : segment.stopRuns ?? 0,
+    longestStopMs: stopped ? Math.max(segment.longestStopMs ?? 0, gap) : segment.longestStopMs ?? 0,
+    // 无论算没算，这次安静都已经结束。
+    stopQualified: false,
   };
 }
 
@@ -144,11 +182,22 @@ function tick(params) {
   // 后台或别的窗口是正常用法。早先这里无条件冻结（连 busy 一起），实测就是
   // 「发起询问后切走，计时停住」—— 而 busy 当初加进来正是为了回答期间不停表。
   // 所以可见性判断必须让 busy 先过：忙的时候，后台照常累加。
-  if (!visible && !busy) {
-    return { segment, effects: noEffects };
-  }
-
   const gapSinceActive = now - segment.lastActiveAt;
+
+  // 安静够 60 秒、且页面可见、模型不在回答 → 本次安静「有资格」算一次停。
+  // 置位后一直带到输入发生（noteActivity 消费）或时段重置。
+  //
+  // 三个排除项都在这个条件里：不可见（人在别处）、busy（在等模型跑，不是休息）。
+  //
+  // ⚠ 必须算在下面那条「不可见就冻结」之前：页面已经隐藏的时刻也要把这个
+  // 值带回去（隐藏期间不可能新置位，但之前置过的位不能丢）。
+  const stopQualified =
+    segment.stopQualified === true ||
+    (visible === true && busy !== true && gapSinceActive >= STOP_MIN_MS);
+
+  if (!visible && !busy) {
+    return { segment: { ...segment, stopQualified }, effects: noEffects };
+  }
 
   // 模型正在回答：这段等待也是沉浸，跳过「超时新时段」与「空闲冻结」两条分支。
   // 长回答（一边跑工具一边等）不应把连续时段打断。busy 期间同样刷新 lastActiveAt，
@@ -165,7 +214,7 @@ function tick(params) {
 
   // 空闲但未到重置阈值：冻结累加（不补算空档）。模型在答时不判空闲。
   if (!busy && gapSinceActive > idleTimeoutMs) {
-    return { segment, effects: noEffects };
+    return { segment: { ...segment, stopQualified }, effects: noEffects };
   }
 
   // 正常累加：本次 tick 覆盖的步长是「距上次 tick」的间隔。
@@ -177,7 +226,7 @@ function tick(params) {
   const activeMs = segment.activeMs + step;
   const satisfied = satisfiedCount(thresholdsMin, activeMs);
 
-  let next = { ...segment, activeMs };
+  let next = { ...segment, activeMs, stopQualified };
   let fire = null;
 
   // 只有当越过新档位时才触发；一次 tick 可能跨多档，只播一次动画但记账全部。
@@ -205,6 +254,8 @@ function toRecord(segment, metrics, now) {
     createdAt: now,
     activeMs: segment.activeMs,
     activeRuns: segment.activeRuns,
+    stopRuns: segment.stopRuns ?? 0,
+    longestStopMs: segment.longestStopMs ?? 0,
     turns: metrics === null || metrics === undefined ? 0 : metrics.turns,
     toolCalls: metrics === null || metrics === undefined ? 0 : metrics.toolCalls,
     truncated: metrics !== null && metrics !== undefined ? metrics.truncated === true : false,

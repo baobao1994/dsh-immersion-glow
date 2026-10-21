@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "description": "沉浸觉察：DSH 会话内的时间觉察助手。净活跃时间到阈值时，右上角弹一张提醒卡指向本次会话统计；可收藏为记录卡，零网络。",
   "keywords": [
+    "deepseek",
+    "harness",
     "dsh",
     "dsh-plugin",
-    "deepseek-harness",
     "immersion",
-    "time-awareness"
+    "time-awareness",
+    "break-reminder",
+    "沉浸觉察",
+    "久坐提醒"
   ],
   "license": "MIT",
   "type": "module",
@@ -24,7 +28,8 @@
     "locale",
     "cordis.patch.yml",
     "README.md",
-    "README.zh.md"
+    "README.en.md",
+    "docs/img"
   ],
   "dsh": {
     "bundle": {
@@ -54,5 +59,17 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "author": "baobao1994",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baobao1994/dsh-immersion-glow.git"
+  },
+  "homepage": "https://github.com/baobao1994/dsh-immersion-glow#readme",
+  "bugs": {
+    "url": "https://github.com/baobao1994/dsh-immersion-glow/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

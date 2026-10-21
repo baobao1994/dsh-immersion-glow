@@ -26,7 +26,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  * @returns { createInitialState, createActions, createStoreHandle, DEFAULT_SETTINGS, PERSIST_KEY, GALLERY_LIMIT, captured }
  */
 function loadStateModule() {
-  const source = readFileSync(join(ROOT, 'src', 'client', 'state.js'), 'utf8');
+  // state.js 现在复用 timing.createSegment（时段形状只留一处定义），所以这里
+  // 必须先求值 timing.js —— 生产构建里它本来也排在 state 之前。
+  const source = `${readFileSync(join(ROOT, 'src', 'client', 'timing.js'), 'utf8')}
+${readFileSync(join(ROOT, 'src', 'client', 'state.js'), 'utf8')}`;
 
   /**
    * 捕获最近一次 defineStore 的 spec。

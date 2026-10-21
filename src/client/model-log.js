@@ -422,9 +422,10 @@ function ringProgress(params) {
     : null;
   if (list === null) return { ratio: 0, nextAtMs: 0, crossed: false };
 
-  // 环的进度受阈值档位约束，阈值提醒计的是「你自己的活跃时长」（activeMs）。
-  // 中心读数（在 hud.js 里）也显示 activeMs —— 使圆环/耗时每秒都在走，而不是在
-  // 模型调用之间卡住。模型净耗时仍记在逐模型明细里（ig-hud-list / 展开面板）。
+  // 进度受阈值档位约束，阈值提醒计的是「你自己的活跃时长」（activeMs）。
+  // 读数（在 hud.js 里）也显示 activeMs —— 使它每秒都在走，而不是在模型调用
+  // 之间卡住。模型净耗时仍记在逐模型明细里（ig-hud-list / 展开面板）。
+  // 返回值里的 ratio 现在驱动暖点的光晕半径（--ig-heat），不再是圆环的弧长。
   // 这里只负责进度档位，与显示口径解耦。
   //
   // ⚠⚠ 档位数必须**不封顶**。

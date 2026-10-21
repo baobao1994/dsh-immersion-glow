@@ -59,7 +59,10 @@ const MODEL_NOTE_LIMIT = 200;
  * @returns 一份全新的空 segment。
  */
 function emptySegment(now) {
-  return { startedAt: now, lastActiveAt: now, activeMs: 0, activeRuns: 0, firedCount: 0 };
+  // 形状的唯一来源在 timing.createSegment —— 这里以前抄了一份，于是 v21 加
+  // stopRuns / longestStopMs / stopQualified 时差点漏掉这个入口（漏掉会让
+  // 旧会话的 segment 少三个字段，noteActivity 里全是 undefined）。
+  return createSegment(now);
 }
 
 /**
@@ -170,7 +173,7 @@ function createInitialState(now) {
     modelNotes: {},
 
     /** 本地埋点：阈值提醒触发 / 用户打开记录卡。 */
-    telemetry: { impressions: 0, opens: 0 },
+    telemetry: { impressions: 0, opens: 0, stops: 0, longestStopMs: 0 },
     /** 纯 UI 态（不跨会话持久有意义，但放一起省一个 store）。 */
     ui: {
       cardOpen: false,
@@ -221,6 +224,22 @@ function createActions() {
     /** 埋点：用户打开记录卡。 */
     countOpen(draft) {
       draft.telemetry.opens += 1;
+    },
+
+    /**
+     * 埋点：一次「停下」（连续 60 秒没有任何输入）。
+     *
+     * 只记次数与最长一次 —— 不记它发生在哪次提醒之后。把「停」绑到「提醒」
+     * 上会引出「你服从了几次」这个问题，而那不是这个插件想问的。
+     *
+     * @param draft - immer draft。
+     * @param payload - { gapMs } 这次停了多久。
+     */
+    countStop(draft, payload) {
+      if (draft.telemetry === null || typeof draft.telemetry !== 'object') return;
+      draft.telemetry.stops += 1;
+      const gap = payload !== null && payload !== undefined && Number.isFinite(payload.gapMs) ? payload.gapMs : 0;
+      if (gap > draft.telemetry.longestStopMs) draft.telemetry.longestStopMs = gap;
     },
 
     /** 更新设置（部分字段）。 */
@@ -760,6 +779,9 @@ function migrateState(raw, now) {
       ? {
           impressions: Number.isFinite(raw.telemetry.impressions) ? raw.telemetry.impressions : 0,
           opens: Number.isFinite(raw.telemetry.opens) ? raw.telemetry.opens : 0,
+          // v21 新增：累计「停」的次数与最长一次。旧数据没有 → 0。
+          stops: Number.isFinite(raw.telemetry.stops) ? raw.telemetry.stops : 0,
+          longestStopMs: Number.isFinite(raw.telemetry.longestStopMs) ? raw.telemetry.longestStopMs : 0,
         }
       : { ...fresh.telemetry };
 
@@ -904,6 +926,10 @@ function mergeIncomingSessions(local, incoming) {
         activeMs: Math.max(num(a.activeMs), num(b.activeMs)),
         activeRuns: Math.max(num(a.activeRuns), num(b.activeRuns)),
         firedCount: Math.max(num(a.firedCount), num(b.firedCount)),
+        // 两个窗口可能各数到一些停顿：取大（宁可少算，不能把同一段安静算两次）。
+        stopRuns: Math.max(num(a.stopRuns), num(b.stopRuns)),
+        longestStopMs: Math.max(num(a.longestStopMs), num(b.longestStopMs)),
+        stopQualified: a.stopQualified === true || b.stopQualified === true,
         lastActiveAt: Math.max(num(a.lastActiveAt), num(b.lastActiveAt)),
         startedAt: startedA === 0 ? startedB : startedB === 0 ? startedA : Math.min(startedA, startedB),
       };
@@ -913,6 +939,8 @@ function mergeIncomingSessions(local, incoming) {
         segment.activeMs === num(a.activeMs) &&
         segment.activeRuns === num(a.activeRuns) &&
         segment.firedCount === num(a.firedCount) &&
+        segment.stopRuns === num(a.stopRuns) &&
+        segment.longestStopMs === num(a.longestStopMs) &&
         segment.lastActiveAt === num(a.lastActiveAt) &&
         segment.startedAt === num(a.startedAt);
       if (!unchanged) {

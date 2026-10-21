@@ -7,7 +7,7 @@
  *
  * 三处挂载点（已核实 kind/scope）：
  *   ① shell.overlay            list / root     记录卡 + 画廊 + 右上角提醒卡
- *   ② settings.general.item    list / root     设置行
+ *   ② settings.section         list / root     设置页（设置导航里的一页）
  *   ③ conversation.input.left  list / session  探针（默认 null）
  *
  * ## stale 判定的权威来源（ADR-123，两次实测事故的结论）
@@ -189,12 +189,23 @@ function registerSlots(params) {
     ),
   );
 
-  // ── ② settings.general.item：设置行 ───────────────────────────────
-  ctx.slots.inject('settings.general.item', () =>
+  // ── ② settings.section：设置页 ───────────────────────────────────
+  //
+  // 为什么是 section 而不是 general.item：宿主契约写得很清楚 ——
+  // general.item 是「一行、单个偏好、不需要自己的页面」，而整页用
+  // settings.section。本插件有 6 项设置 + 3 个数据操作，属于后者。
+  // 注册成 section 之后，设置导航里会多一个「沉浸觉察」入口（label 由宿主投影）。
+  ctx.slots.inject('settings.section', () =>
     ctx.slots.register(
-      { name: 'settings.general.item', id: 'immersion-glow.settings', order: 100 },
-      function ImmersionSettings(props) {
-        return h(SettingsRow, {
+      {
+        name: 'settings.section',
+        id: 'immersion-glow',
+        // 0 通用 / 10 模型 / 12 这里 / 15 内置插件 / 20 智能体预设
+        order: 12,
+        label: () => translator()('settings.title'),
+      },
+      function ImmersionSettingsSection(props) {
+        return h(SettingsPage, {
           React,
           t: translator(),
           useImmersionGlow: props.useImmersionGlow,

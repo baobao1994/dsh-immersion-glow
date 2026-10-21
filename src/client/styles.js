@@ -7,8 +7,10 @@
  * 三条纪律（PRD §3.1 / §3.2 / 官方插件守则）：
  *   1. 所有类名带 `ig-` 前缀，不污染宿主；
  *   2. 动画只动 `opacity` / `transform`，不触发 layout / paint；
- *   3. 颜色与圆角一律走 `--dsw-alias-*` / `--dsw-radius-*` 主题 token，
- *      取不到时才回落到中性值 —— token 改名只影响观感，不会让组件崩掉。
+ *   3. 颜色只走 `--ig-*` 语义层（定义在 panel-css.js 顶部，全部从宿主的
+ *      `--dsw-alias-*` 派生）。不要在组件或 CSS 里写裸色值：宿主没有
+ *      `--dsw-alias-text-brand` 这类名字，写错不会报错，只会静默退化成
+ *      深色主题的值 —— 浅色下就是一片低对比度。
  *
  * @module src/client/styles
  */

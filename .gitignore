@@ -1,5 +1,5 @@
 # 构建产物是入库的（DSH 只认 lib/client.js 的存在），所以 lib/ 不忽略。
-# 这里只忽略开发过程中产生的临时物。
+# 这里只忽略开发过程中产生的临时物与本地数据。
 
 node_modules/
 .DS_Store
@@ -7,3 +7,19 @@ node_modules/
 
 # 本地对比实验的临时目录
 .tmp/
+
+# 本地环境与凭据
+.env
+.env.*
+*.local
+*.pem
+
+# 插件在本地跑出来的记录（会话统计、评分、汇总）
+# 正常情况下它们写在 DSH 的 localStorage 里，不进仓库；
+# 这里再兜一层，防止有人手工导出后误提交。
+records/
+*.record.json
+immersion-glow*.json
+
+# 录屏与成片素材
+recordings/

@@ -121,6 +121,8 @@ function boot(snapshots = {}) {
 
   const probe = record.registered.find((i) => i.kind === 'register' && i.name === 'conversation.input.left');
   const layer = record.registered.find((i) => i.kind === 'register' && i.name === 'shell.overlay');
+  // v20 起设置页注册成 settings.section（不再塞在通用页的一行里）。
+  const settings = record.registered.find((i) => i.kind === 'register' && i.name === 'settings.section');
 
   const runProbe = (sessionId = 's1') => {
     const element = probe.component({
@@ -148,6 +150,7 @@ function boot(snapshots = {}) {
     selectorHook,
     probe,
     layer,
+    settings,
     runProbe,
     contribution,
     provideRootCalls,
@@ -318,9 +321,11 @@ test('发起询问后右上角出现读数', () => {
   assert.ok(hud !== null, '发起后应显示收拢态读数');
 });
 
-test('圆环中心跟着会话已用时长(activeMs)走，而不是模型耗时', () => {
-  // 用户反馈：中心数字之前显示 modelMs，只在模型调用时跳一下，「计时没在走」。
+test('读数里的时长跟着会话已用时长(activeMs)走，而不是模型耗时', () => {
+  // 用户反馈：读数之前显示 modelMs，只在模型调用时跳一下，「计时没在走」。
   // 现在改为显示 activeMs（会话已用时长），随 tick 每秒 +1。
+  // v16 起读数只有一个数字（.ig-hud-time）—— 旧版环心与右侧是同一个值，
+  // 收拢态实际显示「14 14 分钟」。
   const env = boot({
     chat: chatSnapshot(),
     trajectory: trajectorySnapshot(),
@@ -328,22 +333,22 @@ test('圆环中心跟着会话已用时长(activeMs)走，而不是模型耗时'
     model: { next: { provider: 'anthropic', model: 'claude-opus' }, lastUsed: null },
   });
   env.runProbe('s1');
-  const ringText = () => {
+  const timeText = () => {
     const t = hudElement(env);
-    const ring = findByClass(findByClass(t, 'ig-hud'), 'ig-ring-text');
-    return collectText(ring);
+    const hud = findByClass(t, 'ig-hud');
+    return collectText(findByClass(hud, 'ig-hud-time'));
   };
 
-  // 初始 activeMs≈0 → 中心显示 0s（不是旧的 0 也被抬成 1 秒）。
-  assert.equal(ringText(), '0s', '空态中心显示 0s');
+  // 初始 activeMs≈0 → 显示 0 秒（不是旧的 0 也被抬成 1 秒）。
+  assert.equal(timeText(), '0 秒', '空态显示 0 秒');
 
-  // 把 activeMs 推进到 5 秒，中心应跟着变 5s —— 证明读数由 activeMs 驱动。
+  // 把 activeMs 推进到 5 秒，读数应跟着变 5 秒 —— 证明它由 activeMs 驱动。
   env.actions.writeSession({
     sessionId: 's1',
     now: Date.now(),
     segment: { startedAt: 900, lastActiveAt: Date.now(), activeMs: 5000, activeRuns: 1, firedCount: 0 },
   });
-  assert.equal(ringText(), '5s', 'activeMs 增加后中心读数跟着走');
+  assert.equal(timeText(), '5 秒', 'activeMs 增加后读数跟着走');
 });
 
 test('阈值为空时读数不出现', () => {
@@ -472,7 +477,7 @@ test('图层在无会话 / 脏数据下渲染不抛错', () => {
 });
 // ── v5：圆形计时器与提醒联动 ─────────────────────────────────────────
 
-test('收拢态渲染出圆环（svg + 中心读数）', () => {
+test('收拢态渲染出暖点、唯一读数与一句关于下一次休息的话', () => {
   const env = bootedWithData();
   const tree = env.layer.component({
     React: fakeReact(),
@@ -481,10 +486,13 @@ test('收拢态渲染出圆环（svg + 中心读数）', () => {
     immersionGlowActions: env.actions,
   });
   const hud = findByClass(tree, 'ig-hud');
-  assert.ok(hud !== null, '应显示收拢态计时器');
-  assert.ok(findByClass(hud, 'ig-ring') !== null, '应有圆环');
-  assert.ok(findByClass(hud, 'ig-ring-text') !== null, '圆环中心应有读数');
-  assert.ok(findByClass(hud, 'ig-hud-model') !== null, '应有模型名');
+  assert.ok(hud !== null, '应显示收拢态读数');
+  assert.ok(findByClass(hud, 'ig-ember') !== null, '应有会呼吸的暖点');
+  assert.ok(findByClass(hud, 'ig-hud-time') !== null, '应有读数');
+  assert.ok(findByClass(hud, 'ig-hud-next') !== null, '应有「多久之后提醒」');
+  // 旧版环心与右侧是同一个 activeMs，等于把同一个数显示了两遍。
+  assert.equal(findAllByClass(hud, 'ig-hud-time').length, 1, '时长只能出现一次');
+  assert.equal(findByClass(hud, 'ig-ring'), null, '圆环已退役');
 });
 
 test('点击计时器后展开明细面板', () => {
@@ -508,6 +516,109 @@ test('点击计时器后展开明细面板', () => {
   });
   assert.equal(findByClass(after, 'ig-hud'), null, '收拢态应消失');
   assert.ok(findByClass(after, 'ig-hud-panel') !== null, '应换成展开面板');
+});
+
+test('展开面板的 × 能收起（点击必须真的写回 store）', () => {
+  // v19 的真 bug：重写 hud.js 时漏掉了 setOpen 的定义，× 的 onClick 引用它
+  // 直接抛 ReferenceError —— 表现就是「按钮没反应」。没有任何测试点过它。
+  const env = bootedWithData();
+  env.actions.setMeterOpen(true);
+  const panel = findByClass(render(env), 'ig-hud-panel');
+  const close = findByClass(panel, 'ig-hud-collapse');
+  assert.ok(close !== null, '应有收起按钮');
+  assert.equal(typeof close.props.onClick, 'function', '收起按钮必须有点击处理');
+  assert.doesNotThrow(() => close.props.onClick(), '× 的 onClick 不能抛');
+  assert.equal(env.instance.getSnapshot().ui.meterOpen, false, '× 必须真的收起');
+});
+
+test('展开面板里每个可点元素点了都不抛', () => {
+  const countAt = (env) => clickables(findByClass(render(env), 'ig-hud-panel')).length;
+  const env0 = bootedWithData();
+  env0.actions.setMeterOpen(true);
+  const count = countAt(env0);
+  assert.ok(count >= 3, `面板里应有多个可点元素，实际 ${count}`);
+
+  for (let index = 0; index < count; index += 1) {
+    const env = bootedWithData();
+    env.actions.setMeterOpen(true);
+    const buttons = clickables(findByClass(render(env), 'ig-hud-panel'));
+    assert.doesNotThrow(
+      () => buttons[index].props.onClick(),
+      `第 ${index + 1} 个可点元素的 onClick 抛了（多半是引用了没定义的变量）`,
+    );
+  }
+});
+
+test('记录卡的「返回」回到读数，而不是把整个角落实空', () => {
+  // 三个面板的退出口径：返回 = 回到上一层（读数），不是「关闭」。
+  const env = bootedWithData();
+  env.actions.setCardOpen(true);
+  const panel = findAllByClass(render(env), 'ig-panel').find(
+    (node) => node.props?.['aria-label'] === '沉浸记录',
+  );
+  const back = findByClass(panel, 'ig-panel-back');
+  assert.ok(back !== null, '记录卡应有返回按钮');
+  assert.doesNotThrow(() => back.props.onClick());
+  const ui = env.instance.getSnapshot().ui;
+  assert.equal(ui.cardOpen, false, '记录卡应关闭');
+  assert.equal(ui.meterOpen, true, '读数应展开 —— 用户回到的是上一层，不是一个空角落');
+});
+
+test('记录卡与画廊里每个可点元素点了都不抛', () => {
+  // 与上一条同样的理由：这类「画了按钮但 handler 引用了不存在的名字」的错误
+  // 只有真点一下才会暴露。两个面板都覆盖，别只盯着读数。
+  const panelByLabel = (tree, label) =>
+    findAllByClass(tree, 'ig-panel').find((node) => node.props?.['aria-label'] === label) ?? null;
+
+  const cases = [
+    { label: '沉浸记录', open: (env) => env.actions.setCardOpen(true) },
+    { label: '收藏画廊', open: (env) => env.actions.setGalleryOpen(true) },
+  ];
+
+  for (const item of cases) {
+    const probe = bootedWithData();
+    probe.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 4, note: '稳', recordId: 'r1' });
+    probe.actions.saveRecord({ id: 'r1', createdAt: 1000, activeMs: 120000, taskName: '某个任务' });
+    item.open(probe);
+    const panel = panelByLabel(render(probe), item.label);
+    assert.ok(panel !== null, `${item.label} 应渲染出来`);
+    const count = clickables(panel).length;
+    assert.ok(count > 0, `${item.label} 里应有可点元素`);
+
+    for (let index = 0; index < count; index += 1) {
+      const env = bootedWithData();
+      env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 4, note: '稳', recordId: 'r1' });
+      env.actions.saveRecord({ id: 'r1', createdAt: 1000, activeMs: 120000, taskName: '某个任务' });
+      item.open(env);
+      const target = clickables(panelByLabel(render(env), item.label))[index];
+      assert.doesNotThrow(
+        () => target.props.onClick(),
+        `${item.label} 第 ${index + 1} 个可点元素抛了`,
+      );
+    }
+  }
+});
+
+test('只有一个模型时不画占比条（100% 的占比没有信息量）', () => {
+  // 用户实测反馈：单模型时那条纯色长条「看起来像进度条」，还以为是设置错了。
+  const env = bootedWithData();
+  const bucket = env.instance.getSnapshot().sessions.s1;
+  assert.ok(bucket.models.length > 1, '前置：夹具里本来有两个模型');
+  bucket.models = [bucket.models[0]];
+  env.actions.setMeterOpen(true);
+
+  const panel = findByClass(render(env), 'ig-hud-panel');
+  assert.equal(findByClass(panel, 'ig-hud-bar'), null, '单模型不画占比条');
+  assert.equal(findByClass(panel, 'ig-hud-tone'), null, '也不需要色点');
+  assert.ok(findByClass(panel, 'ig-hud-list') !== null, '模型行本身仍在（耗时照常显示）');
+});
+
+test('两个模型时画占比条，每个模型行带一个同色色点', () => {
+  const env = bootedWithData();
+  env.actions.setMeterOpen(true);
+  const panel = findByClass(render(env), 'ig-hud-panel');
+  assert.ok(findByClass(panel, 'ig-hud-bar') !== null, '多模型应画占比条');
+  assert.equal(findAllByClass(panel, 'ig-hud-tone').length, 2, '一条色点对应一个模型');
 });
 
 test('展开面板里显示逐模型历史评价与备注', () => {
@@ -555,6 +666,51 @@ test('记录卡不再渲染跨会话「历史累计」区块', () => {
   assert.ok(!collectText(panel).includes('累计'), '不应再出现跨会话「累计」文案');
 });
 
+test('记录卡：这次停下来过就写一行，没停过就不占位', () => {
+  const env = bootedWithData();
+  const recordPanel = () => findAllByClass(render(env), 'ig-panel').find(
+    (node) => node.props?.['aria-label'] === '沉浸记录',
+  );
+
+  env.actions.setCardOpen(true);
+  assert.ok(!collectText(recordPanel()).includes('停下来'), '没停过不该出现这行');
+
+  const segment = env.instance.getSnapshot().sessions.s1.segment;
+  segment.stopRuns = 2;
+  segment.longestStopMs = 6 * 60000;
+  const text = collectText(recordPanel());
+  assert.ok(text.includes('停下来 2 次'), `应报次数，实际：${text.slice(0, 120)}`);
+  assert.ok(text.includes('最长 6 分钟'), '应报最长一次');
+});
+
+test('记录卡主数字是沉浸时长（activeMs），不是模型耗时', () => {
+  // 这张卡叫「沉浸记录」，第一眼该看到的是「我坐了多久」。
+  // 旧版顶部三格等重，而且主位放的是 modelMs —— 那回答的是模型跑了多久。
+  const env = bootedWithData();
+  env.instance.getSnapshot().sessions.s1.segment.activeMs = 42 * 60000;
+  env.actions.setCardOpen(true);
+
+  const tree = render(env);
+  assert.equal(collectText(findByClass(tree, 'ig-card-hero-value')), '42');
+  assert.equal(collectText(findByClass(tree, 'ig-card-hero-unit')), '分钟');
+});
+
+test('当前会话的时段标签取自 segment，而不是分区顶层的不存在字段', () => {
+  // 旧版读 source.startedAt / source.activeMs：这两个字段只存在于「收藏」上，
+  // 实时分区把它们放在 segment 里。于是正在用的会话永远只带一个「碎片」标签。
+  const env = bootedWithData();
+  const bucket = env.instance.getSnapshot().sessions.s1;
+  bucket.segment.activeMs = 90 * 60000;
+  bucket.segment.startedAt = new Date(2026, 9, 20, 2, 0, 0).getTime();
+  env.actions.setCardOpen(true);
+
+  const tags = findByClass(render(env), 'ig-card-tags');
+  assert.ok(tags !== null, '90 分钟 / 凌晨 → 应有两个标签');
+  const text = collectText(tags);
+  assert.ok(text.includes('深夜'), `凌晨开始应为深夜，实际：${text}`);
+  assert.ok(text.includes('长跑'), `90 分钟应为长跑，实际：${text}`);
+});
+
 test('记录卡只列本次会话用过的模型（不含其它会话的模型）', () => {
   const env = bootedWithData();
   env.actions.addModelNote({ modelKey: 'deepseek/deepseek-chat', rating: 5, note: '稳', recordId: 'r1' });
@@ -579,7 +735,7 @@ test('记录卡只列本次会话用过的模型（不含其它会话的模型�
 });
 
 // v6：提醒不再是独立卡片，而是计时器的一种状态。
-test('提醒让计时器转入警示态，而不是多出一个浮层', () => {
+test('提醒让读数长成一张小暖卡，而不是给同一个药丸换个颜色', () => {
   const env = bootedWithData();
   env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
 
@@ -592,16 +748,38 @@ test('提醒让计时器转入警示态，而不是多出一个浮层', () => {
   // 旧卡片必须彻底不存在。
   assert.equal(findByClass(tree, 'ig-reminder'), null, '不应再有独立提醒卡');
   assert.equal(findByClass(tree, 'ig-reminder-badge'), null, '不应再有未读徽标卡');
-  // 取而代之：计时器圆环转成警示态。
-  assert.ok(findByClass(tree, 'ig-ring--alert') !== null, '圆环应进入提醒态');
-  // v7 起倒计时在副行（ig-hud-sub-line--alert），不再是独立的一行。
-  assert.ok(findByClass(tree, 'ig-hud-sub-line--alert') !== null, '副行应显示倒计时');
+  // 取而代之：暖点停止呼吸 + 同一位置长出一张卡。
+  const card = findByClass(tree, 'ig-hud-card');
+  assert.ok(card !== null, '到点应长出一张提醒卡');
+  assert.ok(findByClass(card, 'ig-ember--alert') !== null, '暖点应进入提醒态（停止呼吸）');
+  assert.ok(findByClass(card, 'ig-hud-count') !== null, '卡片应显示倒计时');
+  const text = collectText(card);
+  assert.ok(text.includes('起来走两步'), `卡片应给一个可执行的动作，实际：${text}`);
+  assert.ok(text.includes('好，歇一下'), '主操作应该是「歇一下」，不是「看明细」');
 });
 
 // ⚠ 这条测试的**名字**一直写着「清未读」，但 v6~v11 的断言里只有 meterOpen。
 // 于是「提醒永远消不掉」这个真 bug 溜了过去：状态确实清得掉（action 在），
 // 只是**没有任何 UI 调用它** —— 而断言只看了面板状态，没看提醒状态。
 // 现在把「清未读」真正断言上。
+test('提醒卡上的两个动作都能清掉提醒（否则卡片永远占着角落）', () => {
+  // 「提醒卡长出来」和「提醒卡消失」是两条独立的失败路径：按钮画出来了但没接
+  // handler，卡片就会永远停在右上角。v6 的「未读消不掉」就是这一类。
+  const dismiss = (index) => {
+    const env = bootedWithData();
+    env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
+    const card = findByClass(render(env), 'ig-hud-card');
+    assert.ok(card !== null, '前置：应长成提醒卡');
+    const buttons = findAllByClass(card, 'ig-btn');
+    assert.ok(buttons.length >= 2, '应有「歇一下」与「先记着」两个动作');
+    assert.notEqual(env.instance.getSnapshot().ui.reminder, null, '前置：提醒在');
+    buttons[index].props.onClick();
+    assert.equal(env.instance.getSnapshot().ui.reminder, null, `第 ${index + 1} 个动作必须清提醒`);
+  };
+  dismiss(0); // 好，歇一下
+  dismiss(1); // 先记着
+});
+
 test('提醒态下点击计时器：清未读 + 展开明细', () => {
   const env = bootedWithData();
   env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
@@ -623,8 +801,8 @@ test('点开后界面上不再有未读标记', () => {
   findByClass(render(env), 'ig-hud').props.onClick();
 
   const after = render(env);
-  assert.equal(findByClass(after, 'ig-ring--unread'), null, '未读环样式应消失');
-  assert.equal(findByClass(after, 'ig-hud-dot'), null, '未读点应消失');
+  assert.equal(findByClass(after, 'ig-ember--unread'), null, '未读态样式应消失');
+  assert.equal(findByClass(after, 'ig-hud-next--alert'), null, '提醒语应恢复常态');
   assert.equal(findByClass(after, 'ig-hud-banner'), null, '提醒条应消失');
 });
 
@@ -633,7 +811,7 @@ test('已超时的未读：点开同样能清掉（不只看倒计时那条路�
   env.actions.showReminder({ message: '该歇了', sticky: true, now: 1_000_000 });
   // 推过 deadline，进入未读态。
   env.instance.getSnapshot().ui.reminder.deadlineAt = 1;
-  assert.ok(findByClass(render(env), 'ig-ring--unread') !== null, '前置：应为未读态');
+  assert.ok(findByClass(render(env), 'ig-ember--unread') !== null, '前置：应为未读态');
 
   findByClass(render(env), 'ig-hud').props.onClick();
   assert.equal(env.instance.getSnapshot().ui.reminder, null, '未读态也必须能清');
@@ -681,8 +859,9 @@ test('sticky 提醒超时后进入未读态（持续警示，不消失）', () =
     useSessions: () => undefined,
     immersionGlowActions: env.actions,
   });
-  assert.ok(findByClass(tree, 'ig-ring--unread') !== null, '未读应让圆环持续警示');
-  assert.ok(findByClass(tree, 'ig-hud-dot') !== null, '未读应有提示点');
+  assert.ok(findByClass(tree, 'ig-ember--unread') !== null, '未读应让暖点持续亮着');
+  const next = findByClass(tree, 'ig-hud-next');
+  assert.ok(next !== null && collectText(next).includes('该歇了'), '未读时应直接说「该歇了」');
 });
 
 test('非 sticky 提醒到点即消失（不留下未读态）', () => {
@@ -697,8 +876,8 @@ test('非 sticky 提醒到点即消失（不留下未读态）', () => {
     useSessions: () => undefined,
     immersionGlowActions: env.actions,
   });
-  assert.equal(findByClass(tree, 'ig-ring--unread'), null, '确认类提醒不该变未读');
-  assert.equal(findByClass(tree, 'ig-ring--alert'), null, '也不该是倒计时态');
+  assert.equal(findByClass(tree, 'ig-ember--unread'), null, '确认类提醒不该变未读');
+  assert.equal(findByClass(tree, 'ig-hud-card'), null, '也不该长成提醒卡');
 });
 
 test('记录卡里不再有跨会话「历史」标记类残留（old/gpt-x 不侵入本次卡）', () => {
@@ -751,6 +930,38 @@ test('汇总页能真正渲染（不抛）—— 覆盖共享 helper 的真实�
   }, '共享 helper 在新签名下必须仍能工作');
 });
 
+test('汇总：长跑有没有用 —— 只统计评过的收藏，按时长分三档', () => {
+  // 不碰正文的那半个「我常问什么」：时长 → 结果。数据全部来自已有的收藏与评价。
+  const env = bootedWithData();
+  env.actions.saveRecord({ id: 'a', createdAt: 1, activeMs: 20 * 60000, taskName: 'A' });
+  env.actions.saveRecord({ id: 'b', createdAt: 2, activeMs: 45 * 60000, taskName: 'B' });
+  env.actions.saveRecord({ id: 'c', createdAt: 3, activeMs: 90 * 60000, taskName: 'C' });
+  // 没评的这条不能进分母（否则达成率会被压低）。
+  env.actions.saveRecord({ id: 'd', createdAt: 4, activeMs: 10 * 60000, taskName: 'D' });
+  env.actions.setVerdict({ recordId: 'a', verdict: 'yes' });
+  env.actions.setVerdict({ recordId: 'b', verdict: 'no' });
+  env.actions.setVerdict({ recordId: 'c', verdict: 'partial' });
+  env.actions.setSummaryOpen(true);
+
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  const rows = findAllByClass(panel, 'ig-rhythm-row');
+  assert.equal(rows.length, 3, '三档都有样本');
+  const texts = rows.map((row) => collectText(row));
+  assert.ok(texts[0].includes('100%'), `30 分钟以内应为 100%，实际 ${texts[0]}`);
+  assert.ok(texts[1].includes('0%'), `30–60 分钟应为 0%，实际 ${texts[1]}`);
+  assert.ok(texts[2].includes('50%'), `1 小时以上应为 50%（基本达到记半分），实际 ${texts[2]}`);
+  assert.ok(texts[0].includes('1 次'), '应显示样本数');
+});
+
+test('汇总：评过的记录不足 3 条时不显示长跑对照（样本太少会误导）', () => {
+  const env = bootedWithData();
+  env.actions.saveRecord({ id: 'a', createdAt: 1, activeMs: 20 * 60000 });
+  env.actions.setVerdict({ recordId: 'a', verdict: 'yes' });
+  env.actions.setSummaryOpen(true);
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  assert.equal(findByClass(panel, 'ig-rhythm'), null);
+});
+
 test('汇总行显示 provider（同名模型来自不同线路时要能区分）', () => {
   const env = bootedWithData();
   env.actions.setSummaryOpen(true);
@@ -770,18 +981,20 @@ test('汇总行显示 provider（同名模型来自不同线路时要能区分�
   assert.ok(findByClass(panel, 'ig-model-provider') !== null, 'provider 走独立的弱化样式');
 });
 
-test('详情面板里的三格指标都渲染出数值', () => {
+test('详情面板：一个主数字 + 一行元信息（旧版的三格指标已合并）', () => {
+  // v19 之前顶部是「模型耗时 / 工具耗时」两格，每个模型行里又有各自的耗时，
+  // 同一个数出现两遍。现在状态区只有一个主数字，其余压成一行元信息。
   const env = bootedWithData();
+  env.instance.getSnapshot().sessions.s1.segment.activeMs = 14 * 60000;
   env.actions.setMeterOpen(true);
-  const tree = env.layer.component({
-    React: fakeReact(),
-    useImmersionGlow: env.selectorHook,
-    useSessions: () => undefined,
-    immersionGlowActions: env.actions,
-  });
-  const figures = findByClass(tree, 'ig-hud-figures');
-  assert.ok(figures !== null);
-  assert.ok(findByClass(figures, 'ig-hud-figure') !== null);
+  const tree = render(env);
+
+  const panel = findByClass(tree, 'ig-hud-panel');
+  assert.equal(collectText(findByClass(panel, 'ig-hud-hero-value')), '14', '主数字是已用时长');
+  assert.equal(collectText(findByClass(panel, 'ig-hud-hero-unit')), '分钟');
+  const meta = collectText(findByClass(panel, 'ig-hud-meta'));
+  assert.ok(meta.includes('工具耗时'), `元信息应含工具耗时，实际 ${meta}`);
+  assert.equal(findByClass(panel, 'ig-hud-figures'), null, '两格指标已合并，不应再渲染');
 });
 
 // ── v7：面板互斥 + 布局分工 ──────────────────────────────────────────
@@ -821,7 +1034,7 @@ test('面板互斥：打开画廊也会关掉记录卡与汇总', () => {
   assert.equal(ui.summaryOpen, false);
 });
 
-test('收拢态两行分工：第一行是主体+总耗时，第二行解释那个数', () => {
+test('收拢态是一个数字配一句话：数字带单位，话说明下一次休息', () => {
   const env = bootedWithData();
   const tree = env.layer.component({
     React: fakeReact(),
@@ -830,15 +1043,16 @@ test('收拢态两行分工：第一行是主体+总耗时，第二行解释那�
     immersionGlowActions: env.actions,
   });
   const hud = findByClass(tree, 'ig-hud');
-  const line = findByClass(hud, 'ig-hud-row-line');
-  const sub = findByClass(hud, 'ig-hud-sub-line');
-  assert.ok(line !== null, '应有两行结构里的第一行');
-  assert.ok(sub !== null, '应有两行结构里的第二行');
-  // 第二行必须解释中心那个没有单位的数字。
-  assert.ok(collectText(sub).includes('已用时长'), '副行应说明这个数是会话已用时长');
+  const time = findByClass(hud, 'ig-hud-time');
+  const next = findByClass(hud, 'ig-hud-next');
+  assert.ok(time !== null, '应有读数');
+  assert.ok(next !== null, '应有第二段文字');
+  // 数字现在自带单位（0 秒 / 14 分钟），不再需要一行字去解释它是什么。
+  assert.ok(collectText(time).length > 0, '读数不该为空');
+  assert.ok(collectText(next).includes('后提醒你'), '第二段说的是下一次休息的时间');
 });
 
-test('提醒态下副行换成倒计时（第一行仍是总耗时）', () => {
+test('提醒卡的卡头保留总耗时，动作给出「歇一下」', () => {
   const env = bootedWithData();
   env.actions.showReminder({ message: '该歇了', sticky: true, now: Date.now() });
   const tree = env.layer.component({
@@ -847,13 +1061,13 @@ test('提醒态下副行换成倒计时（第一行仍是总耗时）', () => {
     useSessions: () => undefined,
     immersionGlowActions: env.actions,
   });
-  const hud = findByClass(tree, 'ig-hud');
-  const sub = findByClass(hud, 'ig-hud-sub-line--alert');
-  assert.ok(sub !== null, '副行应切成倒计时');
-  const text = collectText(sub);
-  assert.ok(text.includes('60s') || text.includes('后收起'), `副行应显示倒计时，实际 ${text}`);
-  // 总耗时仍在第一行右端，不该被提醒挤掉。
-  assert.ok(findByClass(hud, 'ig-hud-time') !== null, '总耗时始终保留');
+  const card = findByClass(tree, 'ig-hud-card');
+  assert.ok(card !== null, '应长成提醒卡');
+  assert.ok(findByClass(card, 'ig-hud-time') !== null, '卡头保留总耗时');
+  const count = findByClass(card, 'ig-hud-count');
+  assert.ok(count !== null, '应有倒计时');
+  const text = collectText(count);
+  assert.ok(text.includes('60s') || text.includes('59s') || text.includes('58s'), `倒计时应从 60s 起，实际 ${text}`);
 });
 
 /**
@@ -983,6 +1197,26 @@ function runMigrate(raw, now) {
 }
 const loadMigrate = {};
 
+
+/**
+ * 收集一棵元素树里所有带 onClick 的节点（按渲染顺序）。
+ *
+ * 用途：一次性点遍面板里所有可点元素，把「按钮画了但 handler 引用了不存在的
+ * 变量」这类接线错误暴露出来。v19 的「× 点了没反应」就是这种：setOpen 在重写
+ * 时被删掉，onClick 里却还在引用它 —— 静态检查查不出，只有真点一下才炸。
+ */
+function clickables(node, out = [], depth = 0) {
+  if (node === null || node === undefined || depth > 40) return out;
+  if (Array.isArray(node)) {
+    for (const child of node) clickables(child, out, depth + 1);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  if (typeof node.type === 'function') return clickables(node.type(node.props ?? {}), out, depth + 1);
+  if (node.props !== undefined && typeof node.props.onClick === 'function') out.push(node);
+  clickables(node.children, out, depth + 1);
+  return out;
+}
 
 /** 渲染图层并返回元素树。 */
 function render(env) {
@@ -1233,13 +1467,108 @@ test('没有备注的模型不显示清除入口（不给无意义的按钮）',
   assert.equal(findByClass(panel, 'ig-summary-clear'), null, '没备注就没什么可清的');
 });
 
-// ── P1-1：环与副行必须来自同一个数 ───────────────────────────────────
+// ── 休息回执：数「停」，不数「服从」──────────────────────────────────
+//
+// 「看到了没点」观测不到，所以回执里不出现「继续」也不出现完成率。
+// 这里只验：次数与最长一次记得住、没停过时不渲染。
+
+test('休息回执：countStop 累加次数并保留最长一次', () => {
+  const env = boot({});
+  env.actions.countStop({ gapMs: 90_000 });
+  env.actions.countStop({ gapMs: 7 * 60_000 });
+  env.actions.countStop({ gapMs: 60_000 });
+  const telemetry = env.instance.getSnapshot().telemetry;
+  assert.equal(telemetry.stops, 3);
+  assert.equal(telemetry.longestStopMs, 7 * 60_000, '最长一次不该被后来的短停顿覆盖');
+});
+
+test('汇总：没停下来过就不出现「休息」这一段', () => {
+  const env = bootedWithData();
+  env.actions.setSummaryOpen(true);
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  assert.ok(!collectText(panel).includes('停下来'), '没有可说的就不说，避免变成负罪感计');
+});
+
+test('汇总：停下来过就报次数与最长一次（不带「继续」）', () => {
+  const env = bootedWithData();
+  env.actions.countStop({ gapMs: 90_000 });
+  env.actions.countStop({ gapMs: 6 * 60_000 });
+  env.actions.setSummaryOpen(true);
+
+  const panel = findByClass(render(env), 'ig-panel--wide');
+  const text = collectText(panel);
+  assert.ok(text.includes('停下来 2 次'), `应报次数，实际：${text.slice(0, 120)}`);
+  assert.ok(text.includes('最长 6 分钟'), '应报最长一次');
+  assert.ok(text.includes('不需要按任何按钮'), '应说明「停」与按钮无关');
+  assert.ok(!text.includes('继续'), '「继续」是默认行为，不该出现在回执里');
+});
+
+test('迁移：旧数据没有 stops / longestStopMs 时补 0', () => {
+  const env = boot({});
+  const persisted = JSON.parse(JSON.stringify(env.instance.getSnapshot()));
+  delete persisted.telemetry.stops;
+  delete persisted.telemetry.longestStopMs;
+  const migrated = runMigrate(persisted, Date.now());
+  assert.equal(migrated.telemetry.stops, 0);
+  assert.equal(migrated.telemetry.longestStopMs, 0);
+});
+
+// ── 设置页（v20：从通用页搬到设置导航）──────────────────────────────
+//
+// 宿主契约把两者分得很清楚：general.item 是「一行、单个偏好」，
+// settings.section 才是「一整页」。这个插件有 6 项设置 + 3 个数据操作，
+// 属于后者 —— 这组测试盯住「页面渲染出来了」和「关闭插件后数据入口还在」。
+
+/** 渲染设置页元素树。 */
+function settingsElement(env) {
+  assert.ok(env.settings !== undefined, '应注册 settings.section');
+  return env.settings.component({
+    React: fakeReact(),
+    useImmersionGlow: env.selectorHook,
+    immersionGlowActions: env.actions,
+  });
+}
+
+test('设置页：标题、说明与三组行都在', () => {
+  const env = boot({});
+  const tree = settingsElement(env);
+  const text = collectText(tree);
+  assert.ok(text.includes('沉浸觉察'), '应有页面标题');
+  assert.ok(text.includes('记录与数据'), '应有记录分组');
+  assert.ok(text.includes('清除本插件数据'), '应有危险操作');
+  assert.equal(findAllByClass(tree, 'ig-settings-row').length, 6, '开启时六行');
+});
+
+test('设置页：关闭插件后提醒相关的行消失，记录与清除仍在', () => {
+  // 旧版把「记录」也一起藏了 —— 关掉插件就再也进不去画廊。数据管理和
+  // 「要不要提醒」是两件事，必须分开。
+  const env = boot({});
+  env.actions.updateSettings({ enabled: false });
+  const tree = settingsElement(env);
+  assert.equal(findAllByClass(tree, 'ig-settings-row').length, 3, '只剩启用 / 记录 / 清除');
+  const text = collectText(tree);
+  assert.ok(!text.includes('触发阈值'), '关闭后不该再显示阈值');
+  assert.ok(text.includes('记录与数据'), '记录入口必须仍在');
+  assert.ok(text.includes('清除本插件数据'), '清除入口必须仍在');
+});
+
+test('设置页：改阈值立即写回 store', () => {
+  const env = boot({});
+  const tree = settingsElement(env);
+  const input = findAllByClass(tree, 'ig-input')[0];
+  assert.ok(input !== undefined, '应有阈值输入框');
+  input.props.onChange({ target: { value: '15, 30' } });
+  // 跨 vm 边界的数组原型不同，deepEqual 会判不等 —— 用 JSON 比内容。
+  assert.equal(JSON.stringify(env.instance.getSnapshot().settings.thresholdsMin), '[15,30]');
+});
+
+// ── P1-1：暖点的热度与那句话必须来自同一个数 ─────────────────────────
 //
 // 早先 progressLabel 自己又调了一次 ringProgress（相同输入）—— 同一语义算两遍，
-// 分叉时就会出现「环快满了但副行说还有 12 分钟」。v11 的「卡在 1 秒」就是同一
+// 分叉时就会出现「暖点快满了但文字说还有 12 分钟」。v11 的「卡在 1 秒」就是同一
 // 模式（两处实现，一处漏改）。这组断言保证两者始终一致。
 
-test('常态副行说的是「下次提醒还有多久」，且与环同步', () => {
+test('常态说的是「下次提醒还有多久」', () => {
   const env = bootedWithData();
   // 设一个能算出确定余量的活跃时长：10 分钟活跃，阈值 5/10/20 → 下一档 20 分，剩 10 分。
   env.instance.getSnapshot().sessions.s1.segment.activeMs = 10 * 60000;
@@ -1247,19 +1576,19 @@ test('常态副行说的是「下次提醒还有多久」，且与环同步', ()
 
   const tree = render(env);
   const hud = findByClass(tree, 'ig-hud');
-  const sub = findByClass(hud, 'ig-hud-sub-line');
-  assert.ok(sub !== null, '常态应有副行');
-  const text = collectText(sub);
-  assert.ok(text.includes('下次提醒还有'), `副行应报下次提醒，实际：${text}`);
+  const next = findByClass(hud, 'ig-hud-next');
+  assert.ok(next !== null, '常态应有第二段文字');
+  const text = collectText(next);
+  assert.ok(text.includes('后提醒你'), `应报下次提醒，实际：${text}`);
   assert.ok(text.includes('10 分钟'), `剩 10 分钟，实际：${text}`);
 });
 
-test('活跃时长翻倍时副行数字跟着变小（不是写死的）', () => {
+test('活跃时长增加时剩余时间跟着变小（不是写死的）', () => {
   const env = bootedWithData();
   env.actions.updateSettings({ thresholdsMin: [5, 10, 20] });
   const readAt = (minutes) => {
     env.instance.getSnapshot().sessions.s1.segment.activeMs = minutes * 60000;
-    return collectText(findByClass(findByClass(render(env), 'ig-hud'), 'ig-hud-sub-line'));
+    return collectText(findByClass(findByClass(render(env), 'ig-hud'), 'ig-hud-next'));
   };
   const at10 = readAt(10);
   const at15 = readAt(15);

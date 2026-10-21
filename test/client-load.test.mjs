@@ -148,7 +148,9 @@ test('apply 注册三处插槽，且 id 互不重复', () => {
   exported.apply(ctx);
 
   const injectKeys = record.registered.filter((item) => item.kind === 'inject').map((i) => i.key);
-  for (const slot of ['shell.overlay', 'settings.general.item', 'conversation.input.left']) {
+  // 设置页从 general.item 搬到了 settings.section（宿主契约：一行用一个
+  // preference row，一整页用 section）。这里跟着改，别让断言继续盯着旧插槽。
+  for (const slot of ['shell.overlay', 'settings.section', 'conversation.input.left']) {
     assert.ok(injectKeys.includes(slot), `缺少 ${slot} 的 inject`);
   }
 

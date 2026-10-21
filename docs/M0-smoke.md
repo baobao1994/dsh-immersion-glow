@@ -10,7 +10,7 @@
 
 ```sh
 D="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-"$D" plugin --profile desktop add /Users/gww/Desktop/开发项目/共创项目/dsh-immersion-glow
+"$D" plugin --profile desktop add <repo>
 ```
 
 确认两件事：

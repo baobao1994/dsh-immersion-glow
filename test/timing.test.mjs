@@ -538,3 +538,112 @@ test('isDifferentLocalDay：同日为假，跨日为真', () => {
   assert.equal(TIMING.isDifferentLocalDay(morning, evening), false);
   assert.equal(TIMING.isDifferentLocalDay(evening, nextDay), true);
 });
+
+// ── 休息回执：数「停」，不数「服从」────────────────────────────────
+//
+// 「看到了没点」是观测不到的 —— 我们只看得到输入安静了多久。所以这里只验证
+// 可观测的那条：连续 60 秒没有输入、页面可见、模型不在回答，才算一次「停」。
+
+test('停：可见且安静满 60 秒，tick 给这次安静置位', () => {
+  const t0 = 5_000_000;
+  const result = TIMING.tick({
+    segment: seg(t0),
+    now: t0 + 61_000,
+    lastTickAt: t0 + 60_000,
+    visible: true,
+    busy: false,
+    ...DEFAULTS,
+  });
+  assert.equal(result.segment.stopQualified, true);
+  assert.equal(result.segment.stopRuns, 0, 'tick 只置位，不记账');
+});
+
+test('停：模型在回答的那 60 秒不算 —— 人在等输出，不是休息', () => {
+  const t0 = 5_100_000;
+  const result = TIMING.tick({
+    segment: seg(t0),
+    now: t0 + 120_000,
+    lastTickAt: t0 + 119_000,
+    visible: true,
+    busy: true,
+    ...DEFAULTS,
+  });
+  assert.equal(result.segment.stopQualified, false);
+});
+
+test('停：页面在后台的安静不算', () => {
+  const t0 = 5_200_000;
+  const result = TIMING.tick({
+    segment: seg(t0),
+    now: t0 + 61_000,
+    lastTickAt: t0 + 60_000,
+    visible: false,
+    busy: false,
+    ...DEFAULTS,
+  });
+  assert.equal(result.segment.stopQualified, false);
+});
+
+test('停：已经置位的安静，不会因为切到后台而丢掉', () => {
+  const t0 = 5_300_000;
+  const qualified = { ...seg(t0), stopQualified: true };
+  const result = TIMING.tick({
+    segment: qualified,
+    now: t0 + 10_000,
+    lastTickAt: t0 + 9_000,
+    visible: false,
+    busy: false,
+    ...DEFAULTS,
+  });
+  assert.equal(result.segment.stopQualified, true);
+});
+
+test('停：输入时消费置位，记一次并清零', () => {
+  const t0 = 5_400_000;
+  const segment = { ...seg(t0), stopQualified: true };
+  const next = TIMING.noteActivity(segment, t0 + 65_000, DEFAULTS.idleTimeoutMs, DEFAULTS.resetGapMs);
+  assert.equal(next.stopRuns, 1);
+  assert.equal(next.longestStopMs, 65_000);
+  assert.equal(next.stopQualified, false, '一次安静只算一次');
+  assert.equal(next.activeRuns, 0, '65 秒没到空闲阈值，不算「离开又回来」');
+});
+
+test('停：间隔超过 resetGapMs 的不算 —— 那是走了，不是歇了', () => {
+  const t0 = 5_500_000;
+  const segment = { ...seg(t0), stopQualified: true };
+  const next = TIMING.noteActivity(
+    segment,
+    t0 + DEFAULTS.resetGapMs + 60_000,
+    DEFAULTS.idleTimeoutMs,
+    DEFAULTS.resetGapMs,
+  );
+  assert.equal(next.stopRuns, 0);
+});
+
+test('停：没有 tick 置位时，120 秒安静也不记（后台/等模型那一类）', () => {
+  const t0 = 5_600_000;
+  const next = TIMING.noteActivity(seg(t0), t0 + 120_000, DEFAULTS.idleTimeoutMs, DEFAULTS.resetGapMs);
+  assert.equal(next.stopRuns, 0);
+});
+
+test('停：完整链路 —— 每秒 tick 走到 61 秒，输入时记一次', () => {
+  const t0 = 5_700_000;
+  let segment = seg(t0);
+  let lastTick = t0;
+  for (let elapsed = 1000; elapsed <= 61_000; elapsed += 1000) {
+    const now = t0 + elapsed;
+    segment = TIMING.tick({
+      segment,
+      now,
+      lastTickAt: lastTick,
+      visible: true,
+      busy: false,
+      ...DEFAULTS,
+    }).segment;
+    lastTick = now;
+  }
+  assert.equal(segment.stopQualified, true, '61 秒后应已置位');
+  const next = TIMING.noteActivity(segment, t0 + 62_000, DEFAULTS.idleTimeoutMs, DEFAULTS.resetGapMs);
+  assert.equal(next.stopRuns, 1);
+  assert.ok(next.longestStopMs >= 60_000, `最长一次应 ≥60s，实际 ${next.longestStopMs}`);
+});

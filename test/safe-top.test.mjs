@@ -127,6 +127,40 @@ test('超过半屏高的容器不算外壳（那是正文）', () => {
   assert.equal(measureSafeTop(root, doc), FALLBACK_TOP);
 });
 
+test('对话区里一段 200px 高的消息容器不会被当成头部', () => {
+  // 旧版的高度上限是「半屏」（vh/2）。一段两百来字、只有 200px 高的消息组
+  // 同样「又宽、又靠上、又不到半屏」，于是被选中 —— 读数掉到对话区中间。
+  // 现在上限收到 140px（头部就 40–140 这个量级）。
+  const { root, doc } = fakeTree({
+    nodes: [
+      { top: 0, height: 76, width: 1200, children: 5 }, // 真正的头部
+      { top: 76, height: 200, width: 1100, children: 30 }, // 消息容器，底边 276
+    ],
+  });
+  assert.equal(measureSafeTop(root, doc), 76 + OFFSET_AFTER_EDGE, '不该被 276 拉下去');
+});
+
+test('插件自己的面板不会被量成头部（窄窗口下它同样又宽又靠上）', () => {
+  // 插件面板宽 316、高 120，在 700px 宽的窗口里满足「宽 ≥ 视口 40%、贴顶、
+  // 高 32–140、底边在上三分之一」。靠 ig- 类名把它排除，否则量的是自己，
+  // 面板再跟着下移 —— 正反馈，越量越靠下。
+  const vw = 700;
+  const vh = 800;
+  const ownPanel = {
+    childElementCount: 3,
+    className: 'ig-hud-card',
+    getBoundingClientRect: () => ({ top: 60, bottom: 180, width: 316, height: 120 }),
+  };
+  const header = {
+    childElementCount: 5,
+    className: '',
+    getBoundingClientRect: () => ({ top: 0, bottom: 60, width: 700, height: 60 }),
+  };
+  const root = { querySelectorAll: () => [ownPanel, header] };
+  const doc = { defaultView: { innerWidth: vw, innerHeight: vh } };
+  assert.equal(measureSafeTop(root, doc), 60 + OFFSET_AFTER_EDGE, '应量头部，不是插件面板');
+});
+
 test('空树 / 无 querySelectorAll → 兜底', () => {
   assert.equal(measureSafeTop(null, { defaultView: null }), FALLBACK_TOP);
   assert.equal(measureSafeTop({}, { defaultView: null }), FALLBACK_TOP);

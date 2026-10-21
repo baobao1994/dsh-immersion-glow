@@ -75,6 +75,67 @@ function rankModels(sessions) {
   });
 }
 
+/** 时长分桶的边界（毫秒）：30 分钟 / 60 分钟。 */
+const RHYTHM_SHORT_MS = 30 * 60000;
+const RHYTHM_LONG_MS = 60 * 60000;
+
+/** 汇总里至少要有这么多条「评过的记录」，这组数字才有可读性。 */
+const RHYTHM_MIN_JUDGED = 3;
+
+/**
+ * 「长跑有没有用」：把**评过的收藏**按时长分三档，各算一个达成率。
+ *
+ * ## 为什么是这个问题
+ *
+ * 用户想知道「我这些时间换来了什么」。最直接的问法是「我常问什么」，但那要
+ * 保存提问正文 —— 插件的承诺是只读首条消息的前 60 字作任务名，不读后续提问。
+ * 换一个不碰正文、且更锋利的问法：**时间越长，结果越好还是越差？**
+ *
+ * 对沉迷 AI coding 的人来说，这组数字比任何劝告都有用：如果 60 分钟以上的
+ * 达成率明显低于 30 分钟以内，那是他自己的数据在说话。
+ *
+ * ## 口径
+ *
+ * 只统计**既在收藏里、又评过档位**的记录（`verdicts[record.id]`）。没评的不进
+ * 分母 —— 把「没评」当「没达成」会把达成率压到真实水平以下（与顶部总达成率同口径：
+ * 达到 = 1 分，基本达到 = 0.5 分）。
+ *
+ * @param collections - 收藏记录数组。
+ * @param verdicts - 按记录 id 索引的评价表。
+ * @returns [{ key, judged, rate }]，只含非空桶；总数不足时返回空数组。
+ */
+function outcomeBuckets(collections, verdicts) {
+  const list = Array.isArray(collections) ? collections : [];
+  const table = verdicts === null || typeof verdicts !== 'object' ? {} : verdicts;
+  const buckets = [
+    { key: 'short', judged: 0, score: 0 },
+    { key: 'mid', judged: 0, score: 0 },
+    { key: 'long', judged: 0, score: 0 },
+  ];
+
+  for (const record of list) {
+    if (record === null || record === undefined) continue;
+    const verdict = table[record.id];
+    const value = verdict === null || verdict === undefined ? null : verdict.verdict;
+    if (value !== 'yes' && value !== 'partial' && value !== 'no') continue;
+    const ms = Number.isFinite(record.activeMs) ? record.activeMs : 0;
+    const index = ms <= RHYTHM_SHORT_MS ? 0 : ms <= RHYTHM_LONG_MS ? 1 : 2;
+    buckets[index].judged += 1;
+    buckets[index].score += value === 'yes' ? 1 : value === 'partial' ? 0.5 : 0;
+  }
+
+  const judgedTotal = buckets.reduce((sum, bucket) => sum + bucket.judged, 0);
+  if (judgedTotal < RHYTHM_MIN_JUDGED) return [];
+
+  return buckets
+    .filter((bucket) => bucket.judged > 0)
+    .map((bucket) => ({
+      key: bucket.key,
+      judged: bucket.judged,
+      rate: bucket.score / bucket.judged,
+    }));
+}
+
 /**
  * 一个会话的平均首 token 延迟。
  * @param stats - sessionStats 归一化值。
@@ -114,11 +175,21 @@ function Summary(props) {
   const collections = useImmersionGlow((state) => state.collections);
   const verdicts = useImmersionGlow((state) => state.verdicts ?? {});
   const modelNotes = useImmersionGlow((state) => state.modelNotes ?? {});
+  const telemetry = useImmersionGlow((state) => state.telemetry ?? {});
 
   if (!open) return null;
 
   const ranked = rankModels(sessions);
   const list = Array.isArray(collections) ? collections : [];
+  const rhythm = outcomeBuckets(list, verdicts);
+
+  // 休息回执：只数「停」，不数「服从」。
+  //
+  // 提醒弹出后「看到了但没点」是观测不到的 —— 我们只看得到输入安静了多久。
+  // 所以这里不出现「继续了几次」，也不出现完成率：默认行为不是失败。
+  const cued = Number.isFinite(telemetry.impressions) ? telemetry.impressions : 0;
+  const stops = Number.isFinite(telemetry.stops) ? telemetry.stops : 0;
+  const longestStopMs = Number.isFinite(telemetry.longestStopMs) ? telemetry.longestStopMs : 0;
 
   // ── 目的达成率 ────────────────────────────────────────────────────
   // 只统计**已自评**的记录。没评的不进分母 —— 把「没评」当「没达成」会把完成率
@@ -168,13 +239,17 @@ function Summary(props) {
       ),
 
       // 占比条：一眼看出这个模型吃掉了你多少时间。
+      //
+      // ⚠ 这里必须用 `--share` 变体。旧版给唯一那一段设 flex-grow，而容器里
+      // 没有别的孩子 —— 它永远把整条撑满，两行都是满格，等于没有信息。
+      // share 模式下段用宽度百分比，剩下的就是轨道。
       totalModelMs(ranked) > 0
         ? h(
             'div',
-            { class: 'ig-hud-bar' },
+            { class: 'ig-hud-bar ig-hud-bar--share' },
             h('span', {
               class: 'ig-hud-seg',
-              style: { flexGrow: String(Math.max(0.02, entry.modelMs / totalModelMs(ranked))) },
+              style: { width: `${Math.max(2, Math.round((entry.modelMs / totalModelMs(ranked)) * 100))}%` },
             }),
           )
         : null,
@@ -271,21 +346,78 @@ function Summary(props) {
             t('summary.verdictBreakdown', { yes: yesCount, partial: partialCount, no: noCount }),
           ),
 
+      // ── 休息回执 ──────────────────────────────────────────────────
+      //
+      // 只在真的停下来过时出现：没有「你还没歇过」这种句子。
+      stops > 0
+        ? h(
+            'div',
+            { className: 'ig-card-section' },
+            h('h3', { className: 'ig-card-label' }, t('summary.rest.title')),
+            h(
+              'p',
+              { className: 'ig-note' },
+              t(cued > 0 ? 'summary.rest.line' : 'summary.rest.lineNoCue', {
+                fired: cued,
+                stops,
+                longest: formatElapsed(longestStopMs, t),
+              }),
+            ),
+            h('p', { className: 'ig-note' }, t('summary.rest.hint')),
+          )
+        : null,
+
+      // ── 长跑有没有用 ──────────────────────────────────────────────
+      //
+      // 不碰正文的那半个「我常问什么」：时长 → 结果。数据全在收藏与评价里，
+      // 不新增任何采集。
+      rhythm.length >= 2
+        ? h(
+            'div',
+            { className: 'ig-card-section' },
+            h('h3', { className: 'ig-card-label' }, t('summary.rhythm.title')),
+            h('p', { className: 'ig-note' }, t('summary.rhythm.hint')),
+            h(
+              'ul',
+              { className: 'ig-rhythm' },
+              rhythm.map((bucket) =>
+                h(
+                  'li',
+                  { className: 'ig-rhythm-row', key: bucket.key },
+                  h('span', { className: 'ig-rhythm-label' }, t(`summary.rhythm.${bucket.key}`)),
+                  h(
+                    'span',
+                    { className: 'ig-rhythm-count' },
+                    t('summary.rhythm.count', { n: bucket.judged }),
+                  ),
+                  h(
+                    'span',
+                    { className: 'ig-rhythm-rate' },
+                    `${Math.round(bucket.rate * 100)}%`,
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+
       // ── 模型排行 ──────────────────────────────────────────────────
       ranked.length === 0
         ? h('p', { className: 'ig-note' }, t('summary.empty'))
         : h(
             'div',
-            { className: 'ig-block' },
-            h('h3', { className: 'ig-block-title' }, t('summary.models')),
+            { className: 'ig-card-section' },
+            h('h3', { className: 'ig-card-label' }, t('summary.models')),
             // 把「我们不做自动判断」写在明面上，避免用户把客观指标误读成评分。
             h('p', { className: 'ig-note' }, t('summary.disclaimer')),
             h('ul', { className: 'ig-summary-list' }, ranked.map(modelRow)),
           ),
 
+      // 主出口固定在底部：加了「长跑有没有用」之后内容稳定超过 640px，
+      // 不留 sticky 的话「查看收藏」会被推到折线以下，而滚动条是藏起来的。
       h(
         'div',
-        { className: 'ig-actions' },
+        { className: 'ig-card-actions' },
         h(
           'button',
           { type: 'button', class: 'ig-btn ig-btn--quiet', onClick: handlers.openGallery },

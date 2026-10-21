@@ -59,7 +59,7 @@ expect(
 );
 
 const files = Array.isArray(pkg.files) ? pkg.files : [];
-for (const entry of ['lib', 'locale', 'cordis.patch.yml', 'README.md', 'README.zh.md']) {
+for (const entry of ['lib', 'locale', 'cordis.patch.yml', 'README.md', 'README.en.md']) {
   expect(files.includes(entry), `package.json files 缺 ${entry}`);
 }
 
@@ -315,7 +315,8 @@ if (clientBundleText.length > 0) {
       expect(typeof exported.apply === 'function', 'client 必须导出 apply');
       exported.apply(fakeCtx);
       const keys = registered.filter((item) => item.key !== undefined).map((item) => item.key);
-      for (const slot of ['shell.overlay', 'settings.general.item', 'conversation.input.left']) {
+      // v20：设置页从 general.item 搬到 settings.section（整页 vs 单行）。
+      for (const slot of ['shell.overlay', 'settings.section', 'conversation.input.left']) {
         expect(keys.includes(slot), `apply() 没有注册到 ${slot}`);
       }
     }
