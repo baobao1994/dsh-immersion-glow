@@ -1,6 +1,6 @@
 {
   "name": "dsh-immersion-glow",
-  "version": "0.1.2",
+  "version": "0.1.1",
   "description": "沉浸觉察：DSH 会话内的时间觉察助手。净活跃时间到阈值时，右上角弹一张提醒卡指向本次会话统计；可收藏为记录卡，零网络。",
   "keywords": [
     "deepseek",
