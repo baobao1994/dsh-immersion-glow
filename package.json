@@ -28,8 +28,7 @@
     "locale",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md",
-    "docs/img"
+    "README.en.md"
   ],
   "dsh": {
     "bundle": {

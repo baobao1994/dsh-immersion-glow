@@ -23,11 +23,11 @@
 
 | 角落读数 | 到点提醒 | 这次记录 | 汇总 |
 | --- | --- | --- | --- |
-| ![](docs/img/reading-light.png) | ![](docs/img/alert-light.png) | ![](docs/img/record-light.png) | ![](docs/img/summary-light.png) |
+| ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/reading-light.png) | ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/alert-light.png) | ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/record-light.png) | ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/summary-light.png) |
 
 | 明细面板 | 设置页 |
 | --- | --- |
-| ![](docs/img/panel-light.png) | ![](docs/img/settings-light.png) |
+| ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/panel-light.png) | ![](https://raw.githubusercontent.com/baobao1994/dsh-immersion-glow/main/docs/img/settings-light.png) |
 
 ---
 
