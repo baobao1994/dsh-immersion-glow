@@ -59,7 +59,7 @@
   "engines": {
     "node": ">=20"
   },
-  "author": "baobao1994",
+  "author": "cavan <598537487@qq.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/baobao1994/dsh-immersion-glow.git"
