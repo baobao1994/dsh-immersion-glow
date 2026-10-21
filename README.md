@@ -5,7 +5,7 @@
 **一个不打扰你的时间觉察助手。**
 它只在右上角呼吸；到点了，才开口叫你歇一会儿。
 
-[![npm version](https://img.shields.io/badge/npm-0.1.1-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
+[![npm version](https://img.shields.io/badge/npm-0.1.2-c9a24b)](https://www.npmjs.com/package/dsh-immersion-glow)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org)
 [![tests](https://img.shields.io/badge/tests-288%20passing-brightgreen)](test/)
